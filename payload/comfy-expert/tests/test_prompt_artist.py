@@ -96,14 +96,14 @@ class VisionAgent(Agent):
         super().__init__()
         self.replies, self.sent = list(replies), []
 
-    def _vision_stream(self, ep, messages):
+    def _vision_stream(self, ep, messages, turn=None):
         self.sent.append(messages)
         text = self.replies.pop(0)
         for i in range(0, len(text), 40):
             yield {"delta": text[i:i + 40]}
         yield {"message": {"role": "assistant", "content": text}}
 
-    def _complete(self, messages, use_tools=True, body=None, base=None):
+    def _complete(self, messages, use_tools=True, body=None, base=None, turn=None):
         raise AssertionError("the main model must not be called")
 
 
@@ -243,7 +243,7 @@ def test_lessons_file_broken_does_not_break(pa):
 
 def test_fixed_reply_without_pending_goes_to_model(pa):
     class Scripted(VisionAgent):
-        def _complete(self, messages, use_tools=True, body=None, base=None):
+        def _complete(self, messages, use_tools=True, body=None, base=None, turn=None):
             yield {"message": {"role": "assistant", "content": "ok"}}
     a = Scripted([])
     evs = list(a.chat(Session(), "perfect, thanks"))

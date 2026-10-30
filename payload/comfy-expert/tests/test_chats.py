@@ -19,7 +19,7 @@ class Scripted(Agent):
         self.replies = list(replies)
         self.sent = []
 
-    def _complete(self, messages, use_tools=True):
+    def _complete(self, messages, use_tools=True, turn=None):
         self.sent.append(messages)
         yield {"message": self.replies.pop(0) if self.replies else {"role": "assistant", "content": "ok"}}
 

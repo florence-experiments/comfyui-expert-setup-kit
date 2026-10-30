@@ -17,6 +17,9 @@ aside button{width:100%;text-align:left}
 button{background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px 10px;cursor:pointer;font:inherit;font-size:13.5px}
 button:hover{border-color:var(--acc)}
 button.primary{background:var(--acc);color:#0b1020;border:none;font-weight:600}
+button.stop{background:#d9534f;color:#fff;border:none;font-weight:700;padding:8px 16px}
+button.stop:hover{background:#c9302c}
+.stopped-line{color:#e0a43a;font-weight:600}
 button.yes{background:var(--ok);color:#06120b;border:none;font-weight:600;padding:8px 22px}
 button.no{background:var(--bad);color:#1a0606;border:none;font-weight:600;padding:8px 22px}
 main{flex:1;display:flex;flex-direction:column;min-width:0}
@@ -127,6 +130,7 @@ nav#chats{width:252px;flex:none;background:#181b20;border-right:1px solid var(--
     <form id="form" onsubmit="send(event)">
       <textarea id="input" placeholder="Ask about ComfyUI, a workflow, models… (Enter = send, Shift+Enter = new line, drop a workflow or picture here)"></textarea>
       <button class="primary" id="sendbtn" type="submit">Send</button>
+      <button class="stop" id="stopbtn" type="button" onclick="stopAI()" title="Stop the AI (Esc)" style="display:none">■ Stop</button>
     </form>
     <div class="hint">Answers come from your local model + tools. Items it could not verify are marked ⚠. Bigger local models (Qwen3.8 27B, -c 32768+) give much better results.</div>
     <div class="credit" style="text-align:right;font-size:10px;opacity:.35;margin-top:4px">Built by Florence for the community.</div>
@@ -197,6 +201,8 @@ class Turn{
       case 'final': if(this.cur){this.cur.innerHTML=md(e.text)} else {this.bubble().innerHTML=md(e.text)} this.endBubble();
         if(e.pa){const R=this.replay; if(!R)this.paButtons(e.pa); else if(R.last)this.paButtons(R.paPending?e.pa:{...e.pa,lessons:[]}); else paActive=true} break;
       case 'error': {const d=document.createElement('div');d.className='bubble';d.style.borderColor='var(--bad)';d.innerHTML='<b style="color:var(--bad)">Error:</b> '+esc(e.text);this.el.insertBefore(d,this.spin);break;}
+      case 'stopped': {if(this.cur&&e.text){this.cur.innerHTML=md(e.text)} this.endBubble();
+        if(!this.el.querySelector('.stopped-line')){const d=document.createElement('div');d.className='status-line stopped-line';d.textContent='■ Stopped';this.el.insertBefore(d,this.spin)} break;}
       case 'done': this.spin.remove(); break;
     }
     scroll();
@@ -223,17 +229,27 @@ class Turn{
   }
 }
 
+let running=null;   // {ctl, turn} while the AI is working
+function setBusy(b){busy=b; const s=document.getElementById('sendbtn'), x=document.getElementById('stopbtn');
+  s.disabled=b; s.style.display=b?'none':''; x.style.display=b?'':'none'; x.disabled=false; x.textContent='■ Stop'}
+async function stopAI(){
+  if(!running)return; const R=running, x=document.getElementById('stopbtn'); x.disabled=true; x.textContent='Stopping…';
+  R.stopping=true;
+  try{await fetch('/api/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({session_id:sessionId})})}catch(e){}
+  try{R.ctl.abort()}catch(e){}
+}
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&running&&document.getElementById('modal').style.display!=='flex'){e.preventDefault();stopAI()}});
 async function run(url, body){
-  busy=true; document.getElementById('sendbtn').disabled=true;
-  const turn=new Turn();
+  setBusy(true);
+  const turn=new Turn(), ctl=new AbortController(); running={ctl,turn};
   try{
-    const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:ctl.signal});
     if(!r.ok){turn.ev({type:'error',text:'HTTP '+r.status+' '+await r.text()});turn.ev({type:'done'});return}
     const rd=r.body.getReader(), dec=new TextDecoder(); let buf='';
     while(true){const {value,done}=await rd.read(); if(done)break; buf+=dec.decode(value,{stream:true});
       let i; while((i=buf.indexOf('\n'))>=0){const line=buf.slice(0,i);buf=buf.slice(i+1); if(line.trim()){try{turn.ev(JSON.parse(line))}catch(x){console.error(x,line)}}}}
-  }catch(x){turn.ev({type:'error',text:String(x)});turn.ev({type:'done'})}
-  finally{busy=false;document.getElementById('sendbtn').disabled=false;input.focus();refreshChats()}
+  }catch(x){if(running&&running.stopping){turn.ev({type:'stopped',text:turn.text})}else{turn.ev({type:'error',text:String(x)})} turn.ev({type:'done'})}
+  finally{running=null;setBusy(false);input.focus();refreshChats()}
 }
 function send(ev){if(ev)ev.preventDefault(); const t=input.value.trim(); if(!t||busy)return; input.value=''; autosize(); addUser(t); run('/api/chat',{session_id:sessionId,message:t})}
 function answer(ok,el){if(busy)return; el.querySelector('.btns').innerHTML=ok?'<b style="color:var(--ok)">✓ approved</b>':'<b style="color:var(--bad)">✗ declined</b>'; run('/api/confirm',{session_id:sessionId,approved:ok})}

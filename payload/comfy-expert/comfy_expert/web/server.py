@@ -11,7 +11,10 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
-from ..agent import Agent, Session
+import requests
+
+from ..agent import Agent, Session, abort_response
+from ..tools import Turn
 from ..chats import ChatStore, make_title
 from ..config import APP_DIR, load_config
 
@@ -25,7 +28,7 @@ def _saved_event(ev: dict) -> dict | None:
     t = ev.get("type")
     if t == "confirm" and len(json.dumps(ev.get("preview"), default=str)) > MAX_SAVED_RESULT:
         return {**ev, "preview": {"saved_preview": json.dumps(ev.get("preview"), default=str)[:MAX_SAVED_RESULT]}}
-    if t in ("assistant", "status", "final", "error", "confirm", "tool_call"):
+    if t in ("assistant", "status", "final", "error", "confirm", "tool_call", "stopped"):
         return {k: v for k, v in ev.items() if k != "items"}
     if t == "tool_result":
         res = ev.get("result")
@@ -81,6 +84,7 @@ def create_app(store: ChatStore | None = None, agent: Agent | None = None) -> Fa
                 yield json.dumps({"type": "error", "text": "This chat is still working on the previous message."}) + "\n"
             return StreamingResponse(busy(), media_type="application/x-ndjson")
         try:
+            session.turn = Turn()
             events = make_events()
             if user_entry is not None:
                 session.display.append(user_entry() if callable(user_entry) else user_entry)
@@ -98,6 +102,8 @@ def create_app(store: ChatStore | None = None, agent: Agent | None = None) -> Fa
                         kept = _saved_event(ev)
                         if kept:
                             entry["events"].append(kept)
+                            if ev["type"] == "stopped":
+                                entry["text"] = ev.get("text") or ""
                             if ev["type"] == "final":
                                 entry["text"] = ev.get("text") or ""
                                 if ev.get("pa"):
@@ -111,6 +117,13 @@ def create_app(store: ChatStore | None = None, agent: Agent | None = None) -> Fa
                     yield json.dumps({"type": "waiting_confirm"}) + "\n"
                 yield json.dumps({"type": "done"}) + "\n"
             finally:
+                turn = session.turn
+                if turn is not None:
+                    turn.stop.set()        # tab closed half-way: stop the work too
+                    try:
+                        events.close()
+                    except Exception:
+                        pass
                 if entry["events"]:
                     session.display.append(entry)
                 save(session)
@@ -145,6 +158,47 @@ def create_app(store: ChatStore | None = None, agent: Agent | None = None) -> Fa
         except Exception:
             out["comfy"] = None
         return out
+
+    def _cancel_comfy(turn: Turn) -> dict:
+        """Remove the ComfyUI jobs this turn queued, and interrupt the one running (local ComfyUI only)."""
+        ids, url = list(turn.comfy_prompts), turn.comfy_url
+        if not ids or not url:
+            return {}
+        out: dict = {"prompts": ids}
+        try:
+            q = requests.get(url + "/queue", timeout=5).json()
+            running = [x[1] for x in q.get("queue_running") or [] if len(x) > 1]
+            pending = [x[1] for x in q.get("queue_pending") or [] if len(x) > 1]
+            mine_pending = [i for i in ids if i in pending]
+            if mine_pending:
+                requests.post(url + "/queue", json={"delete": mine_pending}, timeout=5)
+                out["removed_from_queue"] = mine_pending
+            mine_running = [i for i in ids if i in running]
+            if mine_running:
+                requests.post(url + "/interrupt", json={"prompt_id": mine_running[0]}, timeout=5)
+                out["interrupted"] = mine_running
+        except (requests.RequestException, ValueError) as e:
+            out["error"] = str(e)
+        return out
+
+    @app.post("/api/stop")
+    def api_stop(body: dict):
+        """Stop button: cancel the running turn of this chat (model generation, tools, queued ComfyUI jobs)."""
+        sid = body.get("session_id")
+        s = sessions.get(sid) if sid else None
+        turn = s.turn if s else None
+        lock = locks.get(sid) if sid else None
+        if turn is None or lock is None or not lock.locked():
+            return {"ok": True, "stopped": False, "note": "nothing was running"}
+        turn.stop.set()
+        r = turn.resp
+        if r is not None:
+            abort_response(r)
+        comfy = _cancel_comfy(turn)
+        ended = lock.acquire(timeout=10)
+        if ended:
+            lock.release()
+        return {"ok": True, "stopped": True, "ended": ended, "comfy": comfy}
 
     @app.post("/api/chat")
     async def chat(req: Request):

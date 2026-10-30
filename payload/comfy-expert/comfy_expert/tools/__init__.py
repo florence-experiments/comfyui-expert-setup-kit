@@ -72,3 +72,26 @@ def load_all() -> dict[str, Tool]:
     # import modules for their @tool side effects
     from . import knowledge, web, civitai, hf, comfy, workflow, downloads, imageprompt, lessons  # noqa: F401
     return REGISTRY
+
+
+# ---------------------------------------------------------------- Stop button support
+import contextvars as _cv
+import threading as _th
+
+
+class Stopped(Exception):
+    """The user pressed Stop: abandon the current turn."""
+
+
+class Turn:
+    """Runtime state of one chat turn (never saved): the Stop flag, the open llama-server response
+    and the ComfyUI prompts this turn queued, so Stop can cancel all of them."""
+
+    def __init__(self):
+        self.stop = _th.Event()
+        self.resp = None
+        self.comfy_prompts: list[str] = []
+        self.comfy_url: str | None = None
+
+
+TURN: "_cv.ContextVar[Turn | None]" = _cv.ContextVar("comfy_expert_turn", default=None)

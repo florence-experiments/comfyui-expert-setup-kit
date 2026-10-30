@@ -321,9 +321,17 @@ def comfy_queue_test(source: str, wait_seconds: int = 120, confirm: bool = False
         return {"ok": False, "queued": False, "status": r.status_code, "comfy_error": d.get("error"),
                 "node_errors": d.get("node_errors")}
     pid = d.get("prompt_id")
+    from . import TURN
+    turn = TURN.get()
+    if turn is not None and pid:      # remember it so the Stop button can cancel it
+        turn.comfy_prompts.append(pid)
+        turn.comfy_url = comfy_url()
     t0 = time.time()
     while time.time() - t0 < max(5, min(int(wait_seconds or 120), 1800)):
-        time.sleep(2)
+        if turn is not None and turn.stop.wait(2):
+            return {"queued": True, "prompt_id": pid, "status": "stopped by the user"}
+        if turn is None:
+            time.sleep(2)
         h = session().get(f"{comfy_url()}/history/{pid}", timeout=20).json()
         if pid in h:
             item = h[pid]

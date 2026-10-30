@@ -12,12 +12,16 @@ Events (dicts with "type"):
     confirm       {"id","name","args","summary"} - STOP: needs agent.resume(session, approved)
     final         {"text","unverified":[...]}
     error         {"text"}
+    stopped       {"text"}                      - the user pressed Stop (text = partial answer)
 """
 from __future__ import annotations
 
+import contextvars
 import json
 import platform
 import re
+import socket
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -29,7 +33,7 @@ import requests
 
 from .config import APP_DIR, load_config
 from .safety import with_safety_rule
-from .tools import REGISTRY, load_all, run_tool
+from .tools import REGISTRY, TURN, Stopped, load_all, run_tool
 
 THINK_RE = re.compile(r"<think>.*?</think>", re.S)
 TOOLCALL_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.S)
@@ -113,6 +117,7 @@ class Session:
     title_custom: bool = False
     updated: float = 0.0
 
+    turn: Any = field(default=None, repr=False, compare=False)   # runtime only (Stop button), never saved
     def to_json(self) -> dict:
         return {"id": self.id, "title": self.title, "created": self.created, "messages": self.messages}
 
@@ -177,7 +182,31 @@ class Agent:
             hardware=(c.get("hardware") or {}).get("summary") or "unknown (ask the user if it matters)"))
 
     def _complete(self, messages: list[dict], use_tools: bool = True, body: dict | None = None,
-                  base: str | None = None) -> Iterator[dict]:
+                  base: str | None = None, turn=None) -> Iterator[dict]:
+        """Like _complete_once, but Stop (turn.stop) closes the connection so llama-server stops generating."""
+        if turn is None:
+            yield from self._complete_once(messages, use_tools, body, base)
+            return
+        if turn.stop.is_set():
+            raise Stopped()
+        try:
+            for ev in self._complete_once(messages, use_tools, body, base, turn):
+                if turn.stop.is_set():
+                    raise Stopped()
+                yield ev
+        except Stopped:
+            raise
+        except Exception:
+            if turn.stop.is_set():
+                raise Stopped()
+            raise
+        finally:
+            r, turn.resp = turn.resp, None
+            if r is not None:
+                abort_response(r)
+
+    def _complete_once(self, messages: list[dict], use_tools: bool = True, body: dict | None = None,
+                       base: str | None = None, turn=None) -> Iterator[dict]:
         """Yields {"delta": str} / {"thinking": str} while streaming and finally {"message": {...}}.
         body/base: send a ready request body to another endpoint (used by Prompt Artist for the vision model)."""
         if body is None:
@@ -191,6 +220,8 @@ class Agent:
                                timeout=self.llm.get("timeout", 900), stream=body["stream"])
         except requests.RequestException as e:
             raise LLMError(f"llama-server request failed: {e}") from e
+        if turn is not None:
+            turn.resp = r
         if r.status_code != 200:
             txt = r.text[:800]
             hint = ""
@@ -384,6 +415,75 @@ class Agent:
 
     # ------------------------------------------------------------- main loop
     def chat(self, session: Session, user_text: str) -> Iterator[dict]:
+        yield from self._guard(session, self._chat(session, user_text))
+
+    def resume(self, session: Session, approved: bool) -> Iterator[dict]:
+        yield from self._guard(session, self._resume(session, approved))
+
+    def _guard(self, session: Session, events: Iterator[dict]) -> Iterator[dict]:
+        """Run a turn; if the user presses Stop, end it cleanly and keep the partial answer."""
+        turn = session.turn
+        if turn is None:
+            yield from events
+            return
+        shown = ""
+        try:
+            for ev in events:
+                t = ev.get("type")
+                if t == "delta":
+                    shown += ev.get("text", "")
+                elif t in ("retract", "assistant", "final", "tool_call"):
+                    shown = ""
+                yield ev
+                if turn.stop.is_set():
+                    raise Stopped()
+        except Stopped:
+            try:
+                events.close()
+            except Exception:
+                pass
+            self._finish_stopped(session, shown)
+            yield {"type": "stopped", "text": shown}
+
+    @staticmethod
+    def _finish_stopped(session: Session, partial: str) -> None:
+        """Keep the chat history valid for the next message: answer any unanswered tool calls and
+        record what the model had said before it was stopped."""
+        session.pending = None
+        msgs = session.messages
+        for k in range(len(msgs) - 1, -1, -1):
+            m = msgs[k]
+            if m.get("role") == "user":
+                break
+            if m.get("role") == "assistant" and m.get("tool_calls"):
+                done = {x.get("tool_call_id") for x in msgs[k + 1:] if x.get("role") == "tool"}
+                for c in m["tool_calls"]:
+                    if c.get("id") not in done:
+                        msgs.append({"role": "tool", "tool_call_id": c.get("id"),
+                                     "content": json.dumps({"ok": False, "stopped_by_user": True})})
+                break
+        note = "[stopped by the user]"
+        msgs.append({"role": "assistant", "content": (partial.strip() + "\n\n" + note) if partial.strip() else note})
+
+    def _tool(self, session: Session, name: str, args: dict) -> dict:
+        """run_tool, but Stop does not have to wait for a slow tool (it runs in a helper thread)."""
+        turn = session.turn
+        if turn is None:
+            return run_tool(name, args)
+        if turn.stop.is_set():
+            raise Stopped()
+        ctx = contextvars.copy_context()
+        ctx.run(TURN.set, turn)
+        box: dict = {}
+        th = threading.Thread(target=lambda: box.update(res=ctx.run(run_tool, name, args)), daemon=True)
+        th.start()
+        while th.is_alive():
+            th.join(0.2)
+            if turn.stop.is_set():
+                raise Stopped()
+        return box.get("res", {"ok": False, "error": "tool did not return"})
+
+    def _chat(self, session: Session, user_text: str) -> Iterator[dict]:
         if session.pending:
             yield {"type": "error", "text": "Please answer the pending Yes/No question first."}
             return
@@ -417,7 +517,7 @@ class Agent:
         session.self_checked = False
         yield from self._loop(session)
 
-    def resume(self, session: Session, approved: bool) -> Iterator[dict]:
+    def _resume(self, session: Session, approved: bool) -> Iterator[dict]:
         p = session.pending
         if not p:
             yield {"type": "error", "text": "Nothing is waiting for confirmation."}
@@ -426,7 +526,7 @@ class Agent:
         call = p["call"]
         if approved:
             yield {"type": "status", "text": f"Approved: {call['name']}"}
-            res = run_tool(call["name"], call["args"])
+            res = self._tool(session, call["name"], call["args"])
         else:
             res = {"ok": False, "declined_by_user": True,
                    "message": "The user said NO. Do not retry this action; ask what they want instead or continue without it."}
@@ -493,7 +593,7 @@ class Agent:
             if key in seen:  # small models sometimes repeat the same call in one message
                 res = {"ok": True, "note": "Same call as the previous one in this message - see that result."}
             else:
-                res = run_tool(call["name"], call["args"])
+                res = self._tool(session, call["name"], call["args"])
                 seen[key] = res
             if isinstance(res, dict) and res.get("ok") is False:
                 batch_failed = True
@@ -522,10 +622,10 @@ class Agent:
         return f"Run {n} with {json.dumps(a)[:300]}"
 
     # ------------------------------------------------------------- Prompt Artist (image -> prompt)
-    def _vision_stream(self, ep: dict, messages: list[dict]) -> Iterator[dict]:
+    def _vision_stream(self, ep: dict, messages: list[dict], turn=None) -> Iterator[dict]:
         from .tools import imageprompt
         body = imageprompt.request_body(ep, messages, stream=True)
-        yield from self._complete(messages, use_tools=False, body=body, base=ep["base_url"])
+        yield from self._complete(messages, use_tools=False, body=body, base=ep["base_url"], turn=turn)
 
     def _prompt_artist(self, session: Session, user_text: str, image: str, mode: str = "analyse") -> Iterator[dict]:
         """Send the image straight to the vision model with the Prompt Artist instructions and stream the answer.
@@ -569,7 +669,7 @@ class Agent:
                + (" (result + reference)" if fix and ref is not None else "")}
         raw, shown, msg = "", "", None
         try:
-            for ev in self._vision_stream(ep, msgs):
+            for ev in self._vision_stream(ep, msgs, turn=session.turn):
                 if "delta" in ev:
                     raw += ev["delta"]
                     vis = _visible(raw)
@@ -670,7 +770,7 @@ class Agent:
             msg = None
             raw, shown = "", ""
             try:
-                for ev in self._complete(msgs, use_tools=not no_tools):
+                for ev in self._complete(msgs, use_tools=not no_tools, turn=session.turn):
                     if "delta" in ev:
                         raw += ev["delta"]
                         vis = _visible(raw)
@@ -736,6 +836,22 @@ class Agent:
             yield {"type": "final", "text": text, "unverified": bad}
             return
         yield {"type": "error", "text": f"Stopped after {rounds} tool rounds. Ask me to continue if needed."}
+
+
+def abort_response(r) -> None:
+    """Close a streaming HTTP response right away (also from another thread), so the server sees the
+    client go away and stops generating."""
+    try:
+        conn = getattr(r.raw, "_connection", None) or getattr(r.raw, "connection", None)
+        sock = getattr(conn, "sock", None)
+        if sock is not None:
+            sock.shutdown(socket.SHUT_RDWR)
+    except Exception:
+        pass
+    try:
+        r.close()
+    except Exception:
+        pass
 
 
 def _visible(raw: str) -> str:
