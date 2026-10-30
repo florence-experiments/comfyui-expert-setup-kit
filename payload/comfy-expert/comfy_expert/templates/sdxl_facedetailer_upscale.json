@@ -1,0 +1,868 @@
+{
+ "last_node_id": 14,
+ "last_link_id": 20,
+ "nodes": [
+  {
+   "id": 1,
+   "type": "CheckpointLoaderSimple",
+   "pos": [
+    0,
+    200
+   ],
+   "size": [
+    320,
+    130
+   ],
+   "flags": {},
+   "order": 0,
+   "mode": 0,
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "MODEL",
+     "type": "MODEL",
+     "links": [
+      3,
+      10
+     ],
+     "slot_index": 0
+    },
+    {
+     "name": "CLIP",
+     "type": "CLIP",
+     "links": [
+      1,
+      2,
+      11
+     ],
+     "slot_index": 1
+    },
+    {
+     "name": "VAE",
+     "type": "VAE",
+     "links": [
+      7,
+      12
+     ],
+     "slot_index": 2
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "CheckpointLoaderSimple",
+    "models": [
+     {
+      "name": "juggernautXL_ragnarok.safetensors",
+      "url": "https://civitai.com/api/download/models/1759168",
+      "directory": "checkpoints"
+     }
+    ]
+   },
+   "widgets_values": [
+    "juggernautXL_ragnarok.safetensors"
+   ]
+  },
+  {
+   "id": 2,
+   "type": "CLIPTextEncode",
+   "pos": [
+    420,
+    100
+   ],
+   "size": [
+    320,
+    130
+   ],
+   "flags": {},
+   "order": 1,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "clip",
+     "type": "CLIP",
+     "link": 1
+    }
+   ],
+   "outputs": [
+    {
+     "name": "CONDITIONING",
+     "type": "CONDITIONING",
+     "links": [
+      4,
+      13
+     ],
+     "slot_index": 0
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "CLIPTextEncode"
+   },
+   "widgets_values": [
+    "RAW photo of a 25 year old woman with freckles standing in a sunlit cafe, natural skin texture, detailed eyes, soft window light, 85mm lens, shallow depth of field, photorealistic"
+   ],
+   "title": "Positive prompt"
+  },
+  {
+   "id": 3,
+   "type": "CLIPTextEncode",
+   "pos": [
+    420,
+    400
+   ],
+   "size": [
+    320,
+    130
+   ],
+   "flags": {},
+   "order": 2,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "clip",
+     "type": "CLIP",
+     "link": 2
+    }
+   ],
+   "outputs": [
+    {
+     "name": "CONDITIONING",
+     "type": "CONDITIONING",
+     "links": [
+      5,
+      14
+     ],
+     "slot_index": 0
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "CLIPTextEncode"
+   },
+   "widgets_values": [
+    "cartoon, anime, illustration, painting, 3d render, cgi, doll, plastic skin, airbrushed, deformed, bad anatomy, extra fingers, blurry, lowres, watermark, text, jpeg artifacts"
+   ],
+   "title": "Negative prompt"
+  },
+  {
+   "id": 4,
+   "type": "KSampler",
+   "pos": [
+    880,
+    200
+   ],
+   "size": [
+    320,
+    130
+   ],
+   "flags": {},
+   "order": 3,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "model",
+     "type": "MODEL",
+     "link": 3
+    },
+    {
+     "name": "positive",
+     "type": "CONDITIONING",
+     "link": 4
+    },
+    {
+     "name": "negative",
+     "type": "CONDITIONING",
+     "link": 5
+    },
+    {
+     "name": "latent_image",
+     "type": "LATENT",
+     "link": 8
+    }
+   ],
+   "outputs": [
+    {
+     "name": "LATENT",
+     "type": "LATENT",
+     "links": [
+      6
+     ],
+     "slot_index": 0
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "KSampler"
+   },
+   "widgets_values": [
+    123456789,
+    "randomize",
+    30,
+    4.5,
+    "dpmpp_2m_sde",
+    "karras",
+    1.0
+   ]
+  },
+  {
+   "id": 5,
+   "type": "VAEDecode",
+   "pos": [
+    1240,
+    200
+   ],
+   "size": [
+    320,
+    130
+   ],
+   "flags": {},
+   "order": 4,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "samples",
+     "type": "LATENT",
+     "link": 6
+    },
+    {
+     "name": "vae",
+     "type": "VAE",
+     "link": 7
+    }
+   ],
+   "outputs": [
+    {
+     "name": "IMAGE",
+     "type": "IMAGE",
+     "links": [
+      9,
+      20
+     ],
+     "slot_index": 0
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "VAEDecode"
+   },
+   "widgets_values": []
+  },
+  {
+   "id": 6,
+   "type": "EmptyLatentImage",
+   "pos": [
+    420,
+    700
+   ],
+   "size": [
+    320,
+    130
+   ],
+   "flags": {},
+   "order": 5,
+   "mode": 0,
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "LATENT",
+     "type": "LATENT",
+     "links": [
+      8
+     ],
+     "slot_index": 0
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "EmptyLatentImage"
+   },
+   "widgets_values": [
+    832,
+    1216,
+    1
+   ]
+  },
+  {
+   "id": 7,
+   "type": "UltralyticsDetectorProvider",
+   "pos": [
+    880,
+    600
+   ],
+   "size": [
+    320,
+    130
+   ],
+   "flags": {},
+   "order": 6,
+   "mode": 0,
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "BBOX_DETECTOR",
+     "type": "BBOX_DETECTOR",
+     "links": [
+      15
+     ],
+     "slot_index": 0
+    },
+    {
+     "name": "SEGM_DETECTOR",
+     "type": "SEGM_DETECTOR",
+     "links": [],
+     "slot_index": 1
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "UltralyticsDetectorProvider",
+    "models": [
+     {
+      "name": "face_yolov8m.pt",
+      "url": "https://huggingface.co/Bingsu/adetailer/resolve/main/face_yolov8m.pt",
+      "directory": "ultralytics/bbox"
+     }
+    ]
+   },
+   "widgets_values": [
+    "bbox/face_yolov8m.pt"
+   ]
+  },
+  {
+   "id": 8,
+   "type": "FaceDetailer",
+   "pos": [
+    1240,
+    400
+   ],
+   "size": [
+    320,
+    130
+   ],
+   "flags": {},
+   "order": 7,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "image",
+     "type": "IMAGE",
+     "link": 9
+    },
+    {
+     "name": "model",
+     "type": "MODEL",
+     "link": 10
+    },
+    {
+     "name": "clip",
+     "type": "CLIP",
+     "link": 11
+    },
+    {
+     "name": "vae",
+     "type": "VAE",
+     "link": 12
+    },
+    {
+     "name": "positive",
+     "type": "CONDITIONING",
+     "link": 13
+    },
+    {
+     "name": "negative",
+     "type": "CONDITIONING",
+     "link": 14
+    },
+    {
+     "name": "bbox_detector",
+     "type": "BBOX_DETECTOR",
+     "link": 15
+    },
+    {
+     "name": "sam_model_opt",
+     "type": "SAM_MODEL",
+     "link": null
+    },
+    {
+     "name": "segm_detector_opt",
+     "type": "SEGM_DETECTOR",
+     "link": null
+    },
+    {
+     "name": "detailer_hook",
+     "type": "DETAILER_HOOK",
+     "link": null
+    },
+    {
+     "name": "scheduler_func_opt",
+     "type": "SCHEDULER_FUNC",
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "name": "image",
+     "type": "IMAGE",
+     "links": [
+      17
+     ],
+     "slot_index": 0
+    },
+    {
+     "name": "cropped_refined",
+     "type": "IMAGE",
+     "links": [],
+     "slot_index": 1
+    },
+    {
+     "name": "cropped_enhanced_alpha",
+     "type": "IMAGE",
+     "links": [],
+     "slot_index": 2
+    },
+    {
+     "name": "mask",
+     "type": "MASK",
+     "links": [],
+     "slot_index": 3
+    },
+    {
+     "name": "detailer_pipe",
+     "type": "DETAILER_PIPE",
+     "links": [],
+     "slot_index": 4
+    },
+    {
+     "name": "cnet_images",
+     "type": "IMAGE",
+     "links": [],
+     "slot_index": 5
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "FaceDetailer"
+   },
+   "widgets_values": [
+    512,
+    true,
+    1024,
+    42,
+    "randomize",
+    20,
+    4.5,
+    "dpmpp_2m_sde",
+    "karras",
+    0.4,
+    5,
+    true,
+    true,
+    0.5,
+    10,
+    3.0,
+    "center-1",
+    0,
+    0.93,
+    0,
+    0.7,
+    "False",
+    10,
+    "",
+    1,
+    false,
+    20,
+    false,
+    false
+   ]
+  },
+  {
+   "id": 9,
+   "type": "UpscaleModelLoader",
+   "pos": [
+    1240,
+    900
+   ],
+   "size": [
+    320,
+    130
+   ],
+   "flags": {},
+   "order": 8,
+   "mode": 0,
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "UPSCALE_MODEL",
+     "type": "UPSCALE_MODEL",
+     "links": [
+      16
+     ],
+     "slot_index": 0
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "UpscaleModelLoader",
+    "models": [
+     {
+      "name": "4x-UltraSharp.pth",
+      "url": "https://huggingface.co/Kim2091/UltraSharp/resolve/main/4x-UltraSharp.pth",
+      "directory": "upscale_models"
+     }
+    ]
+   },
+   "widgets_values": [
+    "4x-UltraSharp.pth"
+   ]
+  },
+  {
+   "id": 10,
+   "type": "ImageUpscaleWithModel",
+   "pos": [
+    1640,
+    700
+   ],
+   "size": [
+    320,
+    130
+   ],
+   "flags": {},
+   "order": 9,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "upscale_model",
+     "type": "UPSCALE_MODEL",
+     "link": 16
+    },
+    {
+     "name": "image",
+     "type": "IMAGE",
+     "link": 17
+    }
+   ],
+   "outputs": [
+    {
+     "name": "IMAGE",
+     "type": "IMAGE",
+     "links": [
+      18
+     ],
+     "slot_index": 0
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "ImageUpscaleWithModel"
+   },
+   "widgets_values": []
+  },
+  {
+   "id": 11,
+   "type": "ImageScaleBy",
+   "pos": [
+    1960,
+    700
+   ],
+   "size": [
+    320,
+    130
+   ],
+   "flags": {},
+   "order": 10,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "image",
+     "type": "IMAGE",
+     "link": 18
+    }
+   ],
+   "outputs": [
+    {
+     "name": "IMAGE",
+     "type": "IMAGE",
+     "links": [
+      19
+     ],
+     "slot_index": 0
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "ImageScaleBy"
+   },
+   "widgets_values": [
+    "lanczos",
+    0.5
+   ]
+  },
+  {
+   "id": 12,
+   "type": "SaveImage",
+   "pos": [
+    2260,
+    400
+   ],
+   "size": [
+    320,
+    130
+   ],
+   "flags": {},
+   "order": 11,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "images",
+     "type": "IMAGE",
+     "link": 19
+    }
+   ],
+   "outputs": [
+    {
+     "name": "images",
+     "type": "IMAGE",
+     "links": [],
+     "slot_index": 0
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "SaveImage"
+   },
+   "widgets_values": [
+    "sdxl_face_upscaled"
+   ]
+  },
+  {
+   "id": 13,
+   "type": "PreviewImage",
+   "pos": [
+    1640,
+    200
+   ],
+   "size": [
+    320,
+    130
+   ],
+   "flags": {},
+   "order": 12,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "images",
+     "type": "IMAGE",
+     "link": 20
+    }
+   ],
+   "outputs": [
+    {
+     "name": "images",
+     "type": "IMAGE",
+     "links": [],
+     "slot_index": 0
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "PreviewImage"
+   },
+   "widgets_values": [],
+   "title": "Before FaceDetailer"
+  },
+  {
+   "id": 14,
+   "type": "MarkdownNote",
+   "pos": [
+    0,
+    -320
+   ],
+   "size": [
+    440,
+    260
+   ],
+   "flags": {},
+   "order": 0,
+   "mode": 0,
+   "inputs": [],
+   "outputs": [],
+   "properties": {},
+   "widgets_values": [
+    "FaceDetailer finds faces with YOLO, re-draws each at guide_size and pastes back. Then a 4x ESRGAN-type model upscales and ImageScaleBy 0.5 brings it to 2x. On 16 GB this is fine for SDXL."
+   ],
+   "title": "Read me (ComfyUI Expert template)"
+  }
+ ],
+ "links": [
+  [
+   1,
+   1,
+   1,
+   2,
+   0,
+   "CLIP"
+  ],
+  [
+   2,
+   1,
+   1,
+   3,
+   0,
+   "CLIP"
+  ],
+  [
+   3,
+   1,
+   0,
+   4,
+   0,
+   "MODEL"
+  ],
+  [
+   4,
+   2,
+   0,
+   4,
+   1,
+   "CONDITIONING"
+  ],
+  [
+   5,
+   3,
+   0,
+   4,
+   2,
+   "CONDITIONING"
+  ],
+  [
+   6,
+   4,
+   0,
+   5,
+   0,
+   "LATENT"
+  ],
+  [
+   7,
+   1,
+   2,
+   5,
+   1,
+   "VAE"
+  ],
+  [
+   8,
+   6,
+   0,
+   4,
+   3,
+   "LATENT"
+  ],
+  [
+   9,
+   5,
+   0,
+   8,
+   0,
+   "IMAGE"
+  ],
+  [
+   10,
+   1,
+   0,
+   8,
+   1,
+   "MODEL"
+  ],
+  [
+   11,
+   1,
+   1,
+   8,
+   2,
+   "CLIP"
+  ],
+  [
+   12,
+   1,
+   2,
+   8,
+   3,
+   "VAE"
+  ],
+  [
+   13,
+   2,
+   0,
+   8,
+   4,
+   "CONDITIONING"
+  ],
+  [
+   14,
+   3,
+   0,
+   8,
+   5,
+   "CONDITIONING"
+  ],
+  [
+   15,
+   7,
+   0,
+   8,
+   6,
+   "BBOX_DETECTOR"
+  ],
+  [
+   16,
+   9,
+   0,
+   10,
+   0,
+   "UPSCALE_MODEL"
+  ],
+  [
+   17,
+   8,
+   0,
+   10,
+   1,
+   "IMAGE"
+  ],
+  [
+   18,
+   10,
+   0,
+   11,
+   0,
+   "IMAGE"
+  ],
+  [
+   19,
+   11,
+   0,
+   12,
+   0,
+   "IMAGE"
+  ],
+  [
+   20,
+   5,
+   0,
+   13,
+   0,
+   "IMAGE"
+  ]
+ ],
+ "groups": [],
+ "config": {},
+ "extra": {
+  "comfy_expert": {
+   "title": "SDXL txt2img + FaceDetailer + 2x model upscale",
+   "use_for": "Sharper realistic faces and a bigger final image.",
+   "needs": [
+    "custom nodes: ComfyUI-Impact-Pack + ComfyUI-Impact-Subpack (install via ComfyUI-Manager)",
+    "ultralytics/bbox/face_yolov8m.pt (https://huggingface.co/Bingsu/adetailer/resolve/main/face_yolov8m.pt)",
+    "upscale_models/4x-UltraSharp.pth (https://huggingface.co/Kim2091/UltraSharp/resolve/main/4x-UltraSharp.pth)",
+    "checkpoints: SDXL-family checkpoint"
+   ],
+   "edit_hints": "FaceDetailer denoise 0.35-0.5 for realistic faces; ImageScaleBy 0.5 after a 4x model = 2x total."
+  },
+  "ds": {
+   "scale": 0.8,
+   "offset": [
+    0,
+    0
+   ]
+  }
+ },
+ "version": 0.4
+}

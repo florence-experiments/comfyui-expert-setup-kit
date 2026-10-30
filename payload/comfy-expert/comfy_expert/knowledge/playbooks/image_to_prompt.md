@@ -1,0 +1,8 @@
+# Playbook: image -> prompt (Prompt Artist) and fixing results
+1. The user uploads an image with the Prompt Artist button. The helper sends it straight to the vision model and answers. When you are asked about such an answer later, it is already in the chat.
+2. If you are asked to do it with a tool: image_to_prompt(image, notes). It returns an analysis, the best family from the user's own checkpoints, prompts and settings.
+3. Follow-ups such as "use Pony instead", "make it explicit" or "shorter prompt": rewrite the prompts yourself in the requested family's syntax. Check the syntax with kb_read("image_model_families") and kb_read("danbooru_tagging").
+4. The user shows a bad result: the helper compares the result with the reference (refine mode). For the causes and fixes, kb_read("prompt_fixing"). Past fixes that worked: prompt_lessons(family).
+5. Which checkpoints exist: list_local_models("checkpoints") and list_local_models("loras"). Never invent file names.
+7. Two or more people: the positive is written in BREAK sections (shared section, then `BREAK` on its own line before each person's section, optional shared ending). BREAK works in H1 06 - Prompt Artist (paste prompt, BREAK works), which uses the ComfyUI-ppm `CLIPTextEncodeBREAK` node. In H1 01-05 or a plain `CLIPTextEncode` it is an ordinary word, so tell the user to remove it there.
+8. Where to paste: H1 06 is the default (Illustrious/WAI as is; Pony after switching the checkpoint to `ponyDiffusionV6XL_v6StartWithThisOne` and the anatomy LoRA to 0). H1 01 for one reusable character (content tags only; it adds quality tags). H1 02 for 2-3 people (one tag line per person in LEFT / RIGHT / CENTRE).

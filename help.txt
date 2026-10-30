@@ -1,0 +1,25 @@
+ComfyUI Expert Setup Kit - quick help
+=====================================
+EXPERIMENTAL, provided as-is. Use at your own risk (see DISCLAIMER.md).
+
+Install
+  Windows : double-click Setup-Windows.cmd
+  Linux   : bash setup-linux.sh
+  Answer each question (Enter = the suggestion in brackets), check the plan, type yes.
+
+Start / stop
+  Windows : "ComfyUI Expert" shortcut, or Start ComfyUI Expert.cmd / Stop ComfyUI Expert.cmd
+  Linux   : start-comfy-expert.sh / stop-comfy-expert.sh in the install folder
+  The app opens at http://127.0.0.1:7860 . Start ComfyUI itself before queueing jobs.
+
+Ports: 8080 AI engine, 7860 app, 8765 MCP, 8188 ComfyUI. Never 8081 / 8090 (HomeAI).
+Logs: <install folder>\logs   Settings: <install folder>\app\config.yaml   Keys: app\.env
+
+HomeAI link (optional): shares HomeAI's AI engine and/or adds a Prompt Artist button to HomeAI.
+HomeAI files are backed up first (*.bak-comfy-expert-*); the uninstaller can undo it.
+
+Uninstall: "Uninstall ComfyUI Expert" - asks before every item.
+
+Fixed rule, cannot be removed: nothing sexual involving anyone under 18.
+
+Built by Florence for the community.

@@ -1,0 +1,66 @@
+# ComfyUI Expert settings. setup.bat copies this to config.yaml - edit config.yaml, not this file.
+# Paths: use single quotes on Windows so backslashes are kept as they are.
+
+llm:
+  base_url: 'http://127.0.0.1:8080/v1'   # llama-server (OpenAI-compatible). Change the port if you use another one.
+  model: ''                              # empty = use whatever model llama-server has loaded
+  api_key: 'local'                       # llama-server ignores it unless you start it with --api-key
+  context_size: 32768                    # the -c you start llama-server with (32768 or more recommended)
+  max_tokens: 4096
+  temperature: 0.3
+  max_tool_rounds: 30                    # how many tool steps per question
+  max_tool_result_chars: 9000            # bigger = more detail for the model, but uses more context
+  self_check: true                       # re-check answers for unverified links / files / node names
+  stream: true
+
+comfyui:
+  url: 'http://127.0.0.1:8188'
+  root: ''                               # your ComfyUI folder (the one with main.py); the setup kit fills this in
+  # extra model folders (ComfyUI\models and everything in extra_model_paths.yaml are added automatically)
+  model_roots: []                        # e.g. ['D:\AI\models']
+  # where your workflows are (ComfyUI\user\default\workflows is added automatically)
+  workflow_dirs: []                      # e.g. ['D:\AI\workflows']
+  generated_subfolder: 'generated'       # new workflows are saved in <first workflow folder>\generated
+  download_root: ''                      # '' = first model folder. Downloads go to <download_root>\<checkpoints|loras|vae|...>
+  # official_templates_dir: ''           # auto-detected inside python_embeded
+
+vision:                   # Prompt Artist (image -> prompt, "Fix my result"). Needs a model that can SEE images.
+  base_url: ""            # "" = use the llm server above (the kit's start-llama script loads the vision add-on, --mmproj)
+  model: ""
+  fallback_base_url: ""   # optional second OpenAI-style server with a vision model
+  fallback_model: ""
+  temperature: 0.6
+  max_tokens: 3500
+  timeout: 900
+  thinking: false         # true = slower, rarely better for image reading
+  lessons_file: ""        # "" = data\prompt_lessons.json (what it learned from your "This fixed it" clicks)
+  family_overrides: {}       # LoRA/checkpoint names it can't guess -> family
+    # myLora.safetensors: "Illustrious-XL"
+
+search:
+  searxng_url: ''        # optional: your own SearXNG instance for web_search, e.g. http://127.0.0.1:8888
+  region: 'wt-wt'          # DuckDuckGo region, e.g. 'uk-en', 'us-en', 'wt-wt' = no region
+  safesearch: 'off'
+
+network:
+  proxy: ''              # optional proxy for the tools' web requests, e.g. http://127.0.0.1:7890
+  civitai_fallback_archive: true   # if Civitai is blocked in your country (e.g. UK), use CivArchive + mirrors
+
+ui:
+  host: '127.0.0.1'
+  port: 7860
+  open_browser: true
+
+mcp:
+  host: '127.0.0.1'      # use 0.0.0.0 for OpenHands in Docker (and set a token below)
+  port: 8765
+  token: ''              # optional: clients must send "Authorization: Bearer <token>" (HTTP transports only)
+  allowed_hosts: []      # extra Host names allowed besides localhost and host.docker.internal
+
+keys:                    # better: put keys in .env (see .env.example)
+  civitai_api_key: ''
+  hf_token: ''
+  github_token: ''
+
+hardware:
+  summary: ''           # filled in by the setup kit's system scan (GPU, VRAM, RAM) so the expert gives advice that fits

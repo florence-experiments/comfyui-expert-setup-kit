@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ComfyUI Expert</title>
+<style>
+:root{--bg:#14161a;--panel:#1c1f25;--panel2:#23272f;--text:#e6e6e6;--muted:#9aa3ad;--acc:#7aa2ff;--ok:#4caf7a;--bad:#e06666;--warn:#e0b050;--border:#2e333c}
+*{box-sizing:border-box}
+body{margin:0;font:15px/1.5 system-ui,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--text);display:flex;height:100vh}
+aside{width:270px;background:var(--panel);border-right:1px solid var(--border);padding:14px;display:flex;flex-direction:column;gap:10px;overflow:auto}
+aside h1{font-size:18px;margin:0 0 4px}
+aside .status{font-size:12.5px;color:var(--muted);line-height:1.6}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;background:var(--muted)}
+.dot.ok{background:var(--ok)}.dot.bad{background:var(--bad)}
+aside button{width:100%;text-align:left}
+button{background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px 10px;cursor:pointer;font:inherit;font-size:13.5px}
+button:hover{border-color:var(--acc)}
+button.primary{background:var(--acc);color:#0b1020;border:none;font-weight:600}
+button.yes{background:var(--ok);color:#06120b;border:none;font-weight:600;padding:8px 22px}
+button.no{background:var(--bad);color:#1a0606;border:none;font-weight:600;padding:8px 22px}
+main{flex:1;display:flex;flex-direction:column;min-width:0}
+#log{flex:1;overflow:auto;padding:18px 22px}
+.msg{max-width:920px;margin:0 auto 14px}
+.user .bubble{background:#2a3550;border-radius:12px;padding:10px 14px;white-space:pre-wrap;margin-left:auto;width:fit-content;max-width:85%}
+.bot .bubble{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:10px 14px;overflow-x:auto}
+.bubble p{margin:.4em 0}.bubble pre{background:#0e1013;padding:10px;border-radius:8px;overflow:auto;font-size:13px}
+.bubble code{background:#0e1013;padding:1px 5px;border-radius:4px;font-size:13px}.bubble pre code{padding:0}
+.bubble table{border-collapse:collapse;margin:6px 0;font-size:13.5px}.bubble td,.bubble th{border:1px solid var(--border);padding:4px 8px}
+.bubble a{color:var(--acc)} .bubble blockquote{border-left:3px solid var(--warn);margin:6px 0;padding:2px 10px;color:var(--warn)}
+details.tool{background:var(--panel2);border:1px solid var(--border);border-radius:8px;margin:6px 0;font-size:13px}
+details.tool summary{cursor:pointer;padding:6px 10px;color:var(--muted);list-style:none}
+details.tool summary::before{content:"▸ ";} details.tool[open] summary::before{content:"▾ ";}
+details.tool pre{margin:0;padding:8px 10px;max-height:360px;overflow:auto;white-space:pre-wrap;word-break:break-word;background:#0e1013;border-radius:0 0 8px 8px}
+.tool .nm{color:var(--acc);font-weight:600}.tool .err{color:var(--bad)}.tool .gated{color:var(--warn)}
+.status-line{color:var(--muted);font-size:12.5px;margin:4px 0;font-style:italic}
+details.think{color:var(--muted);font-size:12.5px;margin:4px 0} details.think pre{white-space:pre-wrap;max-height:240px;overflow:auto}
+.confirm{border:1px solid var(--warn);background:#2b2616;border-radius:10px;padding:12px 14px;margin:8px 0}
+.confirm .q{font-weight:600;margin-bottom:6px}.confirm pre{font-size:12px;background:#0e1013;padding:8px;border-radius:6px;white-space:pre-wrap;max-height:200px;overflow:auto}
+.confirm .btns{display:flex;gap:10px;margin-top:8px}
+footer{border-top:1px solid var(--border);padding:12px 22px;background:var(--panel)}
+#form{max-width:920px;margin:0 auto;display:flex;gap:10px;align-items:flex-end}
+textarea{flex:1;resize:none;min-height:48px;max-height:220px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:10px;padding:10px 12px;font:inherit}
+textarea:focus{outline:none;border-color:var(--acc)}
+.hint{max-width:920px;margin:6px auto 0;color:var(--muted);font-size:12px}
+.spinner{display:inline-block;width:12px;height:12px;border:2px solid var(--muted);border-top-color:transparent;border-radius:50%;animation:spin 1s linear infinite;vertical-align:-2px;margin-right:6px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.bubble img.thumb{display:block;max-width:220px;max-height:220px;border-radius:8px;margin-top:6px}
+.pa-btns{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 2px}
+.pa-btns button{padding:6px 12px}
+/* saved chats */
+nav#chats{width:252px;flex:none;background:#181b20;border-right:1px solid var(--border);display:flex;flex-direction:column;min-height:0}
+#chats .hd{display:flex;align-items:center;gap:4px;padding:14px 10px 10px 14px}
+#chats .hd b{flex:1;font-size:14px;font-weight:600;white-space:nowrap}
+.iconbtn{width:auto;padding:3px 8px;background:transparent;border:1px solid transparent;color:var(--muted);font-size:14px}
+.iconbtn:hover{border-color:var(--border);color:var(--text)}
+#chatNew{margin:0 12px 8px;text-align:center}
+#chatSearch{margin:0 12px 8px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:7px 10px;font:inherit;font-size:13px}
+#chatSearch:focus{outline:none;border-color:var(--acc)}
+#chatList{flex:1;overflow:auto;padding:0 6px 12px;scrollbar-width:thin}
+.cgrp{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin:12px 8px 4px}
+.ci{display:flex;align-items:center;gap:9px;padding:6px 8px;border-radius:8px;cursor:pointer;border:1px solid transparent}
+.ci:hover{background:var(--panel2)}
+.ci.active{background:#232c40;border-color:#34446a}
+.ci .ico{width:30px;height:30px;border-radius:6px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--panel2);font-size:14px;overflow:hidden}
+.ci .ico img{width:100%;height:100%;object-fit:cover}
+.ci .tx{flex:1;min-width:0}
+.ci .tt{font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ci .dt{font-size:11.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ci .acts{display:none;flex:none}
+.ci:hover .acts,.ci.active .acts{display:flex}
+.ci .acts button{padding:2px 5px;font-size:12px;background:transparent;border:1px solid transparent;width:auto}
+.ci .acts button:hover{border-color:var(--border);background:var(--panel)}
+.ci input{width:100%;background:var(--bg);color:var(--text);border:1px solid var(--acc);border-radius:6px;padding:3px 6px;font:inherit;font-size:13px}
+.cempty{color:var(--muted);font-size:12.5px;padding:10px 8px}
+#chats .foot{font-size:11.5px;color:var(--muted);padding:8px 14px;border-top:1px solid var(--border)}
+#chats.collapsed{width:46px}
+#chats.collapsed > :not(.hd){display:none}
+#chats.collapsed .hd{flex-direction:column;padding:14px 4px}
+#chats.collapsed .hd b{display:none}
+#chats:not(.collapsed) #chatNewMini{display:none}
+.bubble .file{display:inline-block;margin-top:6px;font-size:12.5px;color:var(--muted)}
+#modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:20;align-items:center;justify-content:center}
+#modal .box{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:18px 20px;width:min(430px,92vw);box-shadow:0 10px 40px rgba(0,0,0,.5)}
+#modal h3{margin:0 0 8px;font-size:16px} #modal p{margin:0 0 14px;color:var(--muted);font-size:13.5px}
+#modal .btns{display:flex;gap:10px;justify-content:flex-end}
+#toast{position:fixed;bottom:90px;left:50%;transform:translateX(-50%);background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:8px 14px;font-size:13px;display:none;z-index:21}
+@media (max-width:1100px){nav#chats:not(.open){width:46px} nav#chats:not(.open) > :not(.hd){display:none} nav#chats:not(.open) .hd{flex-direction:column;padding:14px 4px} nav#chats:not(.open) .hd b{display:none} nav#chats:not(.open) #chatNewMini{display:inline-block}}
+#drop{display:none;position:fixed;inset:0;background:rgba(40,60,120,.35);border:3px dashed var(--acc);z-index:9;align-items:center;justify-content:center;font-size:22px}
+</style>
+</head>
+<body>
+<nav id="chats">
+  <div class="hd"><b>💬 Saved chats</b>
+    <button class="iconbtn" id="chatNewMini" title="New chat" onclick="newChat()">＋</button>
+    <button class="iconbtn" id="chatToggle" title="Hide / show the chat list" onclick="toggleChats()">☰</button></div>
+  <button class="primary" id="chatNew" onclick="newChat()">＋ New chat</button>
+  <input id="chatSearch" type="search" placeholder="🔍 Search chats…" autocomplete="off">
+  <div id="chatList"><div class="cempty">Loading…</div></div>
+  <div class="foot">Every chat is saved automatically. ✏️ rename · 🗑 delete (securely erased).</div>
+</nav>
+<aside>
+  <h1>🧩 ComfyUI Expert</h1>
+  <div class="status" id="status">checking…</div>
+  <div style="color:var(--muted);font-size:12px;margin-top:6px">Quick starts</div>
+  <button onclick="quick('List my workflows and explain the newest one.')">Explain a workflow</button>
+  <button onclick="quick('Look at my workflow NAME and recreate it with more realistic (photographic) adult characters. Produce a refreshed workflow and pick the models I need to download.')">Remake anime → realistic</button>
+  <button onclick="quick('Find me the best realistic SDXL checkpoint that fits 16 GB VRAM, compare 3 options and show download links.')">Find / download models</button>
+  <button onclick="quick('My workflow NAME has red (missing) nodes. Find which packs I need and how to install them.')">Fix red / missing nodes</button>
+  <button onclick="quick('Show me your templates and build a new workflow from the best one for: ')">Build from a template</button>
+  <button onclick="quick('My generation failed with this error: ')">Troubleshoot an error / OOM</button>
+  <button onclick="quick('Compare these models across Civitai, Hugging Face, Tensor.Art and SeaArt: ')">Compare models across sites</button>
+  <div style="color:var(--muted);font-size:12px;margin-top:6px">Prompt Artist (picture → prompt)</div>
+  <button onclick="document.getElementById('paimg').click()" title="Pick a picture (anime, art or photo). You get an analysis, the best model (Pony / Illustrious / ...) and ready prompts. Type a note in the box first if you like.">🎨 Prompt Artist: image → prompt</button>
+  <button onclick="document.getElementById('fiximg').click()" title="Pick the picture you generated. It finds what went wrong, gives a corrected prompt and learns from it. Type what is wrong in the box first if you like.">🔧 Fix my result</button>
+  <button onclick="sendText('Show me the prompt lessons you have learned so far (prompt_lessons), confirmed first.')">📚 What it has learned</button>
+  <input type="file" id="paimg" accept="image/png,image/jpeg,image/webp,image/bmp,image/gif" style="display:none" onchange="promptArtist(this.files[0],'analyse');this.value=''">
+  <input type="file" id="fiximg" accept="image/png,image/jpeg,image/webp,image/bmp,image/gif" style="display:none" onchange="promptArtist(this.files[0],'fix');this.value=''">
+  <div style="color:var(--muted);font-size:12px;margin-top:6px">Files</div>
+  <button onclick="document.getElementById('file').click()">📎 Upload a workflow (.json/.png)</button>
+  <input type="file" id="file" accept=".json,.png,.webp" style="display:none" onchange="upload(this.files[0]);this.value=''">
+  <div class="status" style="margin-top:auto">Read-only by default. Saving, downloading and queueing always ask you first. New workflows are saved to a <b>generated</b> folder; your files are never changed.</div>
+</aside>
+<main>
+  <div id="log"></div>
+  <footer>
+    <form id="form" onsubmit="send(event)">
+      <textarea id="input" placeholder="Ask about ComfyUI, a workflow, models… (Enter = send, Shift+Enter = new line, drop a workflow or picture here)"></textarea>
+      <button class="primary" id="sendbtn" type="submit">Send</button>
+    </form>
+    <div class="hint">Answers come from your local model + tools. Items it could not verify are marked ⚠. Bigger local models (Qwen3.8 27B, -c 32768+) give much better results.</div>
+    <div class="credit" style="text-align:right;font-size:10px;opacity:.35;margin-top:4px">Built by Florence for the community.</div>
+  </footer>
+</main>
+<div id="modal"><div class="box"><h3 id="mTitle"></h3><p id="mText"></p><div class="btns"><button id="mNo">Cancel</button><button class="no" id="mYes">Delete</button></div></div></div>
+<div id="toast"></div>
+<div id="drop">Drop a workflow (.json / .png) or a picture for Prompt Artist</div>
+<script>
+let sessionId = null, busy = false, paActive = false;
+const log = document.getElementById('log'), input = document.getElementById('input');
+
+function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+function md(src){
+  const blocks=[]; src=String(src||'').replace(/```(\w*)\n?([\s\S]*?)```/g,(m,l,c)=>{blocks.push('<pre><code>'+esc(c)+'</code></pre>');return '\u0000'+(blocks.length-1)+'\u0000'});
+  let lines=esc(src).split('\n'), out=[], list=null, table=[];
+  const inline=t=>t.replace(/`([^`]+)`/g,'<code>$1</code>').replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>').replace(/(^|[^*])\*([^*\s][^*]*)\*/g,'$1<i>$2</i>')
+     .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>')
+     .replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g,'$1<a href="$2" target="_blank" rel="noopener">$2</a>');
+  const flushList=()=>{if(list){out.push('</'+list+'>');list=null}};
+  const flushTable=()=>{if(table.length){let h='<table>';table.forEach((r,i)=>{if(/^\|?\s*:?-{2,}/.test(r))return;const cells=r.replace(/^\||\|$/g,'').split('|');h+='<tr>'+cells.map(c=>(i==0?'<th>':'<td>')+inline(c.trim())+(i==0?'</th>':'</td>')).join('')+'</tr>'});out.push(h+'</table>');table=[]}};
+  for(const l of lines){
+    if(/^\s*\|.*\|\s*$/.test(l)){flushList();table.push(l.trim());continue} else flushTable();
+    let m;
+    if(m=l.match(/^(#{1,4})\s+(.*)/)){flushList();out.push('<h'+(m[1].length+2)+'>'+inline(m[2])+'</h'+(m[1].length+2)+'>');}
+    else if(m=l.match(/^\s*[-*]\s+(.*)/)){if(list!='ul'){flushList();out.push('<ul>');list='ul'}out.push('<li>'+inline(m[1])+'</li>')}
+    else if(m=l.match(/^\s*\d+[.)]\s+(.*)/)){if(list!='ol'){flushList();out.push('<ol>');list='ol'}out.push('<li>'+inline(m[1])+'</li>')}
+    else if(m=l.match(/^&gt;\s?(.*)/)){flushList();out.push('<blockquote>'+inline(m[1])+'</blockquote>')}
+    else if(!l.trim()){flushList();out.push('')}
+    else{flushList();out.push('<p>'+inline(l)+'</p>')}
+  }
+  flushList();flushTable();
+  return out.join('\n').replace(/\u0000(\d+)\u0000/g,(m,i)=>blocks[+i]);
+}
+function scroll(){log.scrollTop=log.scrollHeight}
+function addMsg(cls){const d=document.createElement('div');d.className='msg '+cls;log.appendChild(d);return d}
+function addUser(t,img,files){const imgs=Array.isArray(img)?img:(img?[img]:[]);const d=addMsg('user');
+  d.innerHTML='<div class="bubble">'+esc(t)+imgs.map(u=>'<img class="thumb" src="'+esc(u)+'">').join('')+
+    (files||[]).map(f=>'<span class="file">📎 '+esc(f.name)+(f.missing?' (file no longer there)':'')+'</span>').join('<br>')+'</div>';scroll()}
+
+class Turn{
+  constructor(replay){this.replay=replay||null;this.el=addMsg('bot');this.cur=null;this.text='';this.tools={};this.think=null;
+    this.spin=document.createElement('div');this.spin.className='status-line';this.spin.innerHTML='<span class="spinner"></span>thinking…';this.el.appendChild(this.spin)}
+  bubble(){if(!this.cur){this.cur=document.createElement('div');this.cur.className='bubble';this.el.insertBefore(this.cur,this.spin);this.text=''}return this.cur}
+  endBubble(){this.cur=null;this.text=''}
+  ev(e){
+    switch(e.type){
+      case 'session': sessionId=e.id; localStorage.setItem('lastChat',e.id); markActive(); refreshChats(); break;
+      case 'delta': this.think=null; this.text+=e.text; this.bubble().innerHTML=md(this.text); break;
+      case 'retract': if(this.cur){this.cur.remove()} this.endBubble(); break;
+      case 'thinking': {
+        if(!this.think){const d=document.createElement('details');d.className='think';d.innerHTML='<summary>model reasoning</summary><pre></pre>';this.el.insertBefore(d,this.spin);this.think=d.querySelector('pre')}
+        this.think.textContent+=e.text; break;}
+      case 'assistant': if(!this.cur){this.bubble().innerHTML=md(e.text)} this.endBubble(); break;
+      case 'status': {const d=document.createElement('div');d.className='status-line';d.textContent='• '+e.text;this.el.insertBefore(d,this.spin);break;}
+      case 'tool_call': {
+        this.endBubble();
+        const d=document.createElement('details');d.className='tool';
+        d.innerHTML='<summary><span class="nm">🔧 '+esc(e.name)+'</span> <span class="args">'+esc(JSON.stringify(e.args).slice(0,140))+'</span> <span class="res">…</span></summary><pre></pre>';
+        d.querySelector('pre').textContent='arguments:\n'+JSON.stringify(e.args,null,1);
+        this.el.insertBefore(d,this.spin);this.tools[e.id]=d;break;}
+      case 'tool_result': {
+        const d=this.tools[e.id]; if(!d)break;
+        const r=d.querySelector('.res'); const ok=e.result&&e.result.ok!==false;
+        r.className='res '+(ok?'':'err'); r.textContent=ok?'✓ '+e.short:'✗ '+e.short;
+        d.querySelector('pre').textContent+='\n\nresult:\n'+JSON.stringify(e.result,null,1).slice(0,60000);break;}
+      case 'confirm': this.confirm(e); break;
+      case 'final': if(this.cur){this.cur.innerHTML=md(e.text)} else {this.bubble().innerHTML=md(e.text)} this.endBubble();
+        if(e.pa){const R=this.replay; if(!R)this.paButtons(e.pa); else if(R.last)this.paButtons(R.paPending?e.pa:{...e.pa,lessons:[]}); else paActive=true} break;
+      case 'error': {const d=document.createElement('div');d.className='bubble';d.style.borderColor='var(--bad)';d.innerHTML='<b style="color:var(--bad)">Error:</b> '+esc(e.text);this.el.insertBefore(d,this.spin);break;}
+      case 'done': this.spin.remove(); break;
+    }
+    scroll();
+  }
+  paButtons(pa){
+    paActive=true; if(pa.mode==='feedback')return;
+    const d=document.createElement('div');d.className='pa-btns';
+    const b=(label,fn,cls)=>{const x=document.createElement('button');x.textContent=label;if(cls)x.className=cls;x.onclick=()=>{if(busy)return;fn();};d.appendChild(x)};
+    if(pa.mode==='fix'&&pa.lessons&&pa.lessons.length){
+      b('✅ This fixed it',()=>{d.remove();sendText('That fixed it.')},'yes');
+      b('❌ Still wrong',()=>{d.remove();sendText('Still wrong.')},'no');
+    }
+    b(pa.mode==='fix'?'🔧 Upload the new result':'🔧 Fix my result (upload what you generated)',()=>document.getElementById('fiximg').click());
+    this.el.insertBefore(d,this.spin);
+  }
+  confirm(e){
+    const d=document.createElement('div');d.className='confirm';
+    d.innerHTML='<div class="q">⚠ Allow this action?</div><div>'+esc(e.summary)+'</div><pre>'+esc(JSON.stringify(e.args,null,1))+'</pre>'+(e.preview?'<details><summary>Dry-run preview (what will happen)</summary><pre>'+esc(JSON.stringify(e.preview,null,1).slice(0,4000))+'</pre></details>':'')+'<div class="btns"><button class="yes">Yes, do it</button><button class="no">No</button></div>';
+    d.querySelector('.yes').onclick=()=>answer(true,d);d.querySelector('.no').onclick=()=>answer(false,d);
+    const R=this.replay;
+    if(R&&!(R.last&&R.pending)){const b=d.querySelector('.btns');
+      b.innerHTML=R.decision?(R.decision.approved?'<b style="color:var(--ok)">✓ approved</b>':'<b style="color:var(--bad)">✗ declined</b>'):'<span style="color:var(--muted)">not answered</span>'}
+    this.el.insertBefore(d,this.spin);
+  }
+}
+
+async function run(url, body){
+  busy=true; document.getElementById('sendbtn').disabled=true;
+  const turn=new Turn();
+  try{
+    const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    if(!r.ok){turn.ev({type:'error',text:'HTTP '+r.status+' '+await r.text()});turn.ev({type:'done'});return}
+    const rd=r.body.getReader(), dec=new TextDecoder(); let buf='';
+    while(true){const {value,done}=await rd.read(); if(done)break; buf+=dec.decode(value,{stream:true});
+      let i; while((i=buf.indexOf('\n'))>=0){const line=buf.slice(0,i);buf=buf.slice(i+1); if(line.trim()){try{turn.ev(JSON.parse(line))}catch(x){console.error(x,line)}}}}
+  }catch(x){turn.ev({type:'error',text:String(x)});turn.ev({type:'done'})}
+  finally{busy=false;document.getElementById('sendbtn').disabled=false;input.focus();refreshChats()}
+}
+function send(ev){if(ev)ev.preventDefault(); const t=input.value.trim(); if(!t||busy)return; input.value=''; autosize(); addUser(t); run('/api/chat',{session_id:sessionId,message:t})}
+function answer(ok,el){if(busy)return; el.querySelector('.btns').innerHTML=ok?'<b style="color:var(--ok)">✓ approved</b>':'<b style="color:var(--bad)">✗ declined</b>'; run('/api/confirm',{session_id:sessionId,approved:ok})}
+function sendText(t){if(busy)return;addUser(t);run('/api/chat',{session_id:sessionId,message:t})}
+async function uploadFile(f){const fd=new FormData();fd.append('file',f);const r=await fetch('/api/upload',{method:'POST',body:fd});
+  if(!r.ok){alert('Upload failed: '+await r.text());return null} return r.json()}
+function paSend(j,f,mode){
+  const note=input.value.trim(); input.value=''; autosize();
+  const t=mode==='fix'
+    ? 'Prompt Artist fix: here is the image I generated. What went wrong and how do I fix the prompt?'+(note?'\nNote: '+note:'')+'\nImage file: '+j.path
+    : 'Prompt Artist: analyse this image and write the best prompt to recreate it.'+(note?'\n'+note:'')+'\nImage file: '+j.path;
+  addUser(t,URL.createObjectURL(f)); run('/api/chat',{session_id:sessionId,message:t})}
+async function promptArtist(f,mode){if(!f||busy)return; const j=await uploadFile(f); if(j)paSend(j,f,mode)}
+function quick(t){input.value=t;autosize();input.focus()}
+function newChat(){if(busy){toast('Wait for the answer to finish first.');return}
+  sessionId=null;paActive=false;localStorage.removeItem('lastChat');log.innerHTML='';hello();markActive();input.focus()}
+async function upload(f,dropped){if(!f)return; const j=await uploadFile(f); if(!j)return;
+  if(j.kind!=='workflow'&&!busy){
+    const isImg=j.kind==='image';
+    if(isImg||(dropped&&confirm('Use this picture with Prompt Artist?\nOK = Prompt Artist   Cancel = load its ComfyUI workflow'))){
+      const fix=paActive&&confirm('Is this a result you generated from my prompt?\nOK = 🔧 Fix my result   Cancel = 🎨 analyse it as a new picture');
+      paSend(j,f,fix?'fix':'analyse'); return}
+  }
+  input.value=(input.value?input.value+'\n':'')+'Workflow file: '+j.path+'\n'; autosize(); input.focus()}
+function autosize(){input.style.height='auto';input.style.height=Math.min(input.scrollHeight,220)+'px'}
+input.addEventListener('input',autosize);
+input.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){send(e)}});
+const drop=document.getElementById('drop');
+window.addEventListener('dragover',e=>{e.preventDefault();drop.style.display='flex'});
+drop.addEventListener('dragleave',()=>drop.style.display='none');
+drop.addEventListener('drop',e=>{e.preventDefault();drop.style.display='none';if(e.dataTransfer.files[0])upload(e.dataTransfer.files[0],true)});
+function hello(){const d=addMsg('bot');d.innerHTML='<div class="bubble">'+md("Hi! I'm **ComfyUI Expert**. I can read and explain your workflows, remake them in another style (e.g. anime → realistic), find real models on Civitai / Hugging Face / Tensor.Art / SeaArt and mirrors, fix red nodes, build workflows from verified templates and troubleshoot errors on your AMD card.\n\n🎨 **Prompt Artist**: give me any picture (anime, art, photo) and I'll write a detailed prompt and tell you which model to use (Pony, Illustrious/WAI, SD 1.5, Qwen...). If your generation comes out wrong, upload it with **🔧 Fix my result** and I'll fix the prompt and learn from it.\n\nI only change things after you click **Yes**.")+'</div>'}
+async function status(){
+  try{const j=await (await fetch('/api/info')).json(); const s=document.getElementById('status');
+    s.innerHTML='<div><span class="dot '+(j.model?'ok':'bad')+'"></span>LLM: '+esc(j.model||'not reachable')+(j.n_ctx?' (ctx '+j.n_ctx+')':'')+'</div>'+
+      (j.n_ctx&&j.n_ctx<24000?'<div style="color:var(--warn)">context is small – start llama-server with -c 32768</div>':'')+
+      (j.llm_error?'<div style="color:var(--bad)">'+esc(j.llm_error)+'</div>':'')+
+      '<div><span class="dot '+(j.comfy?'ok':'bad')+'"></span>ComfyUI: '+(j.comfy?esc('v'+j.comfy.version+' – '+(j.comfy.device||'')+' – '+j.comfy.vram_free_gb+' GB free'):'not running (using bundled node list)')+'</div>';
+  }catch(x){}
+}
+
+// ---------------------------------------------------------------- saved chats
+let chats=[], chatQuery='', searchTimer=null;
+const chatList=document.getElementById('chatList');
+function toast(t){const d=document.getElementById('toast');d.textContent=t;d.style.display='block';clearTimeout(toast.t);toast.t=setTimeout(()=>d.style.display='none',2600)}
+function dayStart(d){return new Date(d.getFullYear(),d.getMonth(),d.getDate()).getTime()}
+function daysAgo(ts){return Math.round((dayStart(new Date())-dayStart(new Date(ts*1000)))/864e5)}
+function fmtWhen(ts){const d=new Date(ts*1000),n=daysAgo(ts),t=d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+  if(n<=0)return 'Today '+t; if(n===1)return 'Yesterday '+t; if(n<7)return d.toLocaleDateString('en-GB',{weekday:'long'})+' '+t;
+  return d.toLocaleDateString('en-GB',{day:'numeric',month:'short',year:d.getFullYear()!==new Date().getFullYear()?'numeric':undefined})}
+function groupOf(ts){const n=daysAgo(ts); if(n<=0)return 'Today'; if(n===1)return 'Yesterday'; if(n<7)return 'Previous 7 days'; if(n<30)return 'Previous 30 days';
+  return new Date(ts*1000).toLocaleDateString('en-GB',{month:'long',year:'numeric'})}
+async function refreshChats(){
+  try{const r=await fetch('/api/chats?q='+encodeURIComponent(chatQuery)); chats=(await r.json()).chats||[]; renderChats()}catch(x){}
+}
+function renderChats(){
+  if(!chats.length){chatList.innerHTML='<div class="cempty">'+(chatQuery?'No chats match “'+esc(chatQuery)+'”.':'No saved chats yet. Start typing – every chat is saved automatically.')+'</div>';return}
+  let h='',g='';
+  for(const c of chats){const gg=groupOf(c.updated||c.created); if(gg!==g){g=gg;h+='<div class="cgrp">'+esc(g)+'</div>'}
+    const ico=c.thumb?'<img src="'+esc(c.thumb)+'" alt="">':(c.mode==='prompt_artist'?'🎨':'💬');
+    h+='<div class="ci'+(c.id===sessionId?' active':'')+'" data-id="'+esc(c.id)+'" title="'+esc(c.title+(c.preview?'\n\n'+c.preview:''))+'">'+
+      '<div class="ico">'+ico+'</div><div class="tx"><div class="tt">'+esc(c.title)+'</div><div class="dt">'+esc(fmtWhen(c.updated||c.created))+
+      (c.turns?' · '+c.turns+' msg'+(c.turns>1?'s':''):'')+'</div></div>'+
+      '<div class="acts"><button data-act="rename" title="Rename">✏️</button><button data-act="delete" title="Delete">🗑</button></div></div>'}
+  chatList.innerHTML=h;
+}
+function markActive(){chatList.querySelectorAll('.ci').forEach(e=>e.classList.toggle('active',e.dataset.id===sessionId))}
+chatList.addEventListener('click',e=>{const it=e.target.closest('.ci'); if(!it||e.target.tagName==='INPUT')return; const id=it.dataset.id, act=e.target.closest('button')?.dataset.act;
+  if(act==='rename')startRename(it,id); else if(act==='delete')deleteChat(id); else if(id!==sessionId)openChat(id)});
+chatList.addEventListener('dblclick',e=>{const it=e.target.closest('.ci'); if(it&&e.target.closest('.tt'))startRename(it,it.dataset.id)});
+document.getElementById('chatSearch').addEventListener('input',e=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>{chatQuery=e.target.value.trim();refreshChats()},200)});
+function startRename(it,id){const tt=it.querySelector('.tt'); if(!tt)return; const c=chats.find(x=>x.id===id); const inp=document.createElement('input');
+  inp.value=c?c.title:tt.textContent; tt.replaceWith(inp); inp.focus(); inp.select(); let done=false;
+  const finish=async save=>{if(done)return; done=true; const t=inp.value.trim();
+    if(save&&t&&(!c||t!==c.title)){const r=await fetch('/api/chats/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:t})}); if(!r.ok)toast('Rename failed: '+r.status)}
+    refreshChats()};
+  inp.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();finish(true)} else if(e.key==='Escape'){finish(false)}});
+  inp.addEventListener('blur',()=>finish(true))}
+function ask(title,text,yes){return new Promise(res=>{const m=document.getElementById('modal'); document.getElementById('mTitle').textContent=title;
+  document.getElementById('mText').textContent=text; const y=document.getElementById('mYes'),n=document.getElementById('mNo'); y.textContent=yes||'Delete';
+  const close=v=>{m.style.display='none';y.onclick=n.onclick=m.onclick=document.onkeydown=null;res(v)};
+  y.onclick=()=>close(true); n.onclick=()=>close(false); m.onclick=e=>{if(e.target===m)close(false)}; document.onkeydown=e=>{if(e.key==='Escape')close(false)};
+  m.style.display='flex'; n.focus()})}
+async function deleteChat(id){const c=chats.find(x=>x.id===id)||{title:'this chat'};
+  if(id===sessionId&&busy){toast('Wait for the answer to finish first.');return}
+  if(!await ask('Delete “'+c.title+'”?','The chat and its pictures are securely erased (overwritten, then deleted). This cannot be undone.','Delete for good'))return;
+  const r=await fetch('/api/chats/'+id,{method:'DELETE'});
+  if(!r.ok){toast('Could not delete: '+(await r.text()));return}
+  toast('Chat deleted'); if(id===sessionId)newChat(); refreshChats()}
+async function openChat(id){
+  if(busy){toast('Wait for the answer to finish first.');return}
+  let r; try{r=await fetch('/api/chats/'+encodeURIComponent(id))}catch(x){return}
+  if(!r.ok){if(localStorage.getItem('lastChat')===id)localStorage.removeItem('lastChat'); toast('That chat is no longer there.'); refreshChats(); return}
+  const c=await r.json(); sessionId=c.id; localStorage.setItem('lastChat',c.id); paActive=c.mode==='prompt_artist'; log.innerHTML='';
+  const D=c.display||[]; if(!D.length)hello();
+  D.forEach((e,i)=>{
+    if(e.role==='user'){const fs=e.files||[]; addUser(e.text,fs.filter(f=>f.kind==='image'&&f.url).map(f=>f.url),fs.filter(f=>f.kind!=='image'||!f.url))}
+    else if(e.role==='assistant'){const later=D.slice(i+1).some(x=>x.role!=='decision');
+      const t=new Turn({last:!later,pending:c.pending,paPending:c.pa_pending,decision:D[i+1]&&D[i+1].role==='decision'?D[i+1]:null});
+      (e.events||[]).forEach(ev=>{try{t.ev(ev)}catch(x){console.error(x)}}); t.ev({type:'done'})}
+  });
+  markActive(); scroll(); input.focus()}
+function toggleChats(){const n=document.getElementById('chats'); if(window.innerWidth<=1100){n.classList.toggle('open');return}
+  n.classList.toggle('collapsed'); localStorage.setItem('chatsCollapsed',n.classList.contains('collapsed')?'1':'')}
+if(localStorage.getItem('chatsCollapsed'))document.getElementById('chats').classList.add('collapsed');
+(async()=>{await refreshChats(); const last=localStorage.getItem('lastChat'); const pick=chats.find(c=>c.id===last)||chats[0];
+  if(pick)await openChat(pick.id); else hello()})();
+status(); setInterval(status,30000); input.focus();
+</script>
+</body>
+</html>

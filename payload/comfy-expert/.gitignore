@@ -1,0 +1,9 @@
+.venv/
+config.yaml
+.env
+cache/sessions/
+cache/uploads/
+cache/*.tmp
+drafts/
+__pycache__/
+.pytest_cache/

@@ -1,0 +1,597 @@
+{
+ "last_node_id": 11,
+ "last_link_id": 14,
+ "nodes": [
+  {
+   "id": 1,
+   "type": "CheckpointLoaderSimple",
+   "pos": [
+    0,
+    200
+   ],
+   "size": [
+    320,
+    130
+   ],
+   "flags": {},
+   "order": 0,
+   "mode": 0,
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "MODEL",
+     "type": "MODEL",
+     "links": [
+      3
+     ],
+     "slot_index": 0
+    },
+    {
+     "name": "CLIP",
+     "type": "CLIP",
+     "links": [
+      1,
+      2
+     ],
+     "slot_index": 1
+    },
+    {
+     "name": "VAE",
+     "type": "VAE",
+     "links": [
+      7,
+      9
+     ],
+     "slot_index": 2
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "CheckpointLoaderSimple",
+    "models": [
+     {
+      "name": "juggernautXL_ragnarok.safetensors",
+      "url": "https://civitai.com/api/download/models/1759168",
+      "directory": "checkpoints"
+     }
+    ]
+   },
+   "widgets_values": [
+    "juggernautXL_ragnarok.safetensors"
+   ]
+  },
+  {
+   "id": 2,
+   "type": "CLIPTextEncode",
+   "pos": [
+    420,
+    100
+   ],
+   "size": [
+    320,
+    130
+   ],
+   "flags": {},
+   "order": 1,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "clip",
+     "type": "CLIP",
+     "link": 1
+    }
+   ],
+   "outputs": [
+    {
+     "name": "CONDITIONING",
+     "type": "CONDITIONING",
+     "links": [
+      4
+     ],
+     "slot_index": 0
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "CLIPTextEncode"
+   },
+   "widgets_values": [
+    "RAW photo of a 25 year old woman with freckles standing in a sunlit cafe, natural skin texture, detailed eyes, soft window light, 85mm lens, shallow depth of field, photorealistic"
+   ],
+   "title": "Positive prompt"
+  },
+  {
+   "id": 3,
+   "type": "CLIPTextEncode",
+   "pos": [
+    420,
+    400
+   ],
+   "size": [
+    320,
+    130
+   ],
+   "flags": {},
+   "order": 2,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "clip",
+     "type": "CLIP",
+     "link": 2
+    }
+   ],
+   "outputs": [
+    {
+     "name": "CONDITIONING",
+     "type": "CONDITIONING",
+     "links": [
+      5
+     ],
+     "slot_index": 0
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "CLIPTextEncode"
+   },
+   "widgets_values": [
+    "cartoon, anime, illustration, painting, 3d render, cgi, doll, plastic skin, airbrushed, deformed, bad anatomy, extra fingers, blurry, lowres, watermark, text, jpeg artifacts"
+   ],
+   "title": "Negative prompt"
+  },
+  {
+   "id": 4,
+   "type": "KSampler",
+   "pos": [
+    880,
+    200
+   ],
+   "size": [
+    320,
+    130
+   ],
+   "flags": {},
+   "order": 3,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "model",
+     "type": "MODEL",
+     "link": 3
+    },
+    {
+     "name": "positive",
+     "type": "CONDITIONING",
+     "link": 4
+    },
+    {
+     "name": "negative",
+     "type": "CONDITIONING",
+     "link": 5
+    },
+    {
+     "name": "latent_image",
+     "type": "LATENT",
+     "link": 13
+    }
+   ],
+   "outputs": [
+    {
+     "name": "LATENT",
+     "type": "LATENT",
+     "links": [
+      6
+     ],
+     "slot_index": 0
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "KSampler"
+   },
+   "widgets_values": [
+    123456789,
+    "randomize",
+    30,
+    4.5,
+    "dpmpp_2m_sde",
+    "karras",
+    0.8
+   ]
+  },
+  {
+   "id": 5,
+   "type": "VAEDecode",
+   "pos": [
+    1240,
+    200
+   ],
+   "size": [
+    320,
+    130
+   ],
+   "flags": {},
+   "order": 4,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "samples",
+     "type": "LATENT",
+     "link": 6
+    },
+    {
+     "name": "vae",
+     "type": "VAE",
+     "link": 7
+    }
+   ],
+   "outputs": [
+    {
+     "name": "IMAGE",
+     "type": "IMAGE",
+     "links": [
+      14
+     ],
+     "slot_index": 0
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "VAEDecode"
+   },
+   "widgets_values": []
+  },
+  {
+   "id": 6,
+   "type": "LoadImage",
+   "pos": [
+    0,
+    600
+   ],
+   "size": [
+    320,
+    130
+   ],
+   "flags": {},
+   "order": 5,
+   "mode": 0,
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "IMAGE",
+     "type": "IMAGE",
+     "links": [
+      8
+     ],
+     "slot_index": 0
+    },
+    {
+     "name": "MASK",
+     "type": "MASK",
+     "links": [
+      10
+     ],
+     "slot_index": 1
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "LoadImage"
+   },
+   "widgets_values": [
+    "example.png",
+    "image"
+   ],
+   "title": "Load image (paint mask in MaskEditor)"
+  },
+  {
+   "id": 7,
+   "type": "VAEEncode",
+   "pos": [
+    420,
+    700
+   ],
+   "size": [
+    320,
+    130
+   ],
+   "flags": {},
+   "order": 6,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "pixels",
+     "type": "IMAGE",
+     "link": 8
+    },
+    {
+     "name": "vae",
+     "type": "VAE",
+     "link": 9
+    }
+   ],
+   "outputs": [
+    {
+     "name": "LATENT",
+     "type": "LATENT",
+     "links": [
+      11
+     ],
+     "slot_index": 0
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "VAEEncode"
+   },
+   "widgets_values": []
+  },
+  {
+   "id": 8,
+   "type": "GrowMask",
+   "pos": [
+    420,
+    850
+   ],
+   "size": [
+    320,
+    130
+   ],
+   "flags": {},
+   "order": 7,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "mask",
+     "type": "MASK",
+     "link": 10
+    }
+   ],
+   "outputs": [
+    {
+     "name": "MASK",
+     "type": "MASK",
+     "links": [
+      12
+     ],
+     "slot_index": 0
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "GrowMask"
+   },
+   "widgets_values": [
+    8,
+    true
+   ]
+  },
+  {
+   "id": 9,
+   "type": "SetLatentNoiseMask",
+   "pos": [
+    700,
+    750
+   ],
+   "size": [
+    320,
+    130
+   ],
+   "flags": {},
+   "order": 8,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "samples",
+     "type": "LATENT",
+     "link": 11
+    },
+    {
+     "name": "mask",
+     "type": "MASK",
+     "link": 12
+    }
+   ],
+   "outputs": [
+    {
+     "name": "LATENT",
+     "type": "LATENT",
+     "links": [
+      13
+     ],
+     "slot_index": 0
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "SetLatentNoiseMask"
+   },
+   "widgets_values": []
+  },
+  {
+   "id": 10,
+   "type": "SaveImage",
+   "pos": [
+    1500,
+    200
+   ],
+   "size": [
+    320,
+    130
+   ],
+   "flags": {},
+   "order": 9,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "images",
+     "type": "IMAGE",
+     "link": 14
+    }
+   ],
+   "outputs": [
+    {
+     "name": "images",
+     "type": "IMAGE",
+     "links": [],
+     "slot_index": 0
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "SaveImage"
+   },
+   "widgets_values": [
+    "sdxl_inpaint"
+   ]
+  },
+  {
+   "id": 11,
+   "type": "MarkdownNote",
+   "pos": [
+    0,
+    -320
+   ],
+   "size": [
+    440,
+    260
+   ],
+   "flags": {},
+   "order": 0,
+   "mode": 0,
+   "inputs": [],
+   "outputs": [],
+   "properties": {},
+   "widgets_values": [
+    "Inpaint: only the masked (grown by 8px) area is re-generated. Describe what should appear in the masked area."
+   ],
+   "title": "Read me (ComfyUI Expert template)"
+  }
+ ],
+ "links": [
+  [
+   1,
+   1,
+   1,
+   2,
+   0,
+   "CLIP"
+  ],
+  [
+   2,
+   1,
+   1,
+   3,
+   0,
+   "CLIP"
+  ],
+  [
+   3,
+   1,
+   0,
+   4,
+   0,
+   "MODEL"
+  ],
+  [
+   4,
+   2,
+   0,
+   4,
+   1,
+   "CONDITIONING"
+  ],
+  [
+   5,
+   3,
+   0,
+   4,
+   2,
+   "CONDITIONING"
+  ],
+  [
+   6,
+   4,
+   0,
+   5,
+   0,
+   "LATENT"
+  ],
+  [
+   7,
+   1,
+   2,
+   5,
+   1,
+   "VAE"
+  ],
+  [
+   8,
+   6,
+   0,
+   7,
+   0,
+   "IMAGE"
+  ],
+  [
+   9,
+   1,
+   2,
+   7,
+   1,
+   "VAE"
+  ],
+  [
+   10,
+   6,
+   1,
+   8,
+   0,
+   "MASK"
+  ],
+  [
+   11,
+   7,
+   0,
+   9,
+   0,
+   "LATENT"
+  ],
+  [
+   12,
+   8,
+   0,
+   9,
+   1,
+   "MASK"
+  ],
+  [
+   13,
+   9,
+   0,
+   4,
+   3,
+   "LATENT"
+  ],
+  [
+   14,
+   5,
+   0,
+   10,
+   0,
+   "IMAGE"
+  ]
+ ],
+ "groups": [],
+ "config": {},
+ "extra": {
+  "comfy_expert": {
+   "title": "SDXL inpaint (works with normal checkpoints)",
+   "use_for": "Repaint a masked area. Draw the mask in ComfyUI: right-click the Load Image node > Open in MaskEditor.",
+   "needs": [
+    "checkpoints: SDXL-family checkpoint (an *inpainting* checkpoint works even better)",
+    "input image with mask"
+   ],
+   "edit_hints": "denoise 0.6-0.9. VAEEncode + SetLatentNoiseMask keeps the unmasked area unchanged."
+  },
+  "ds": {
+   "scale": 0.8,
+   "offset": [
+    0,
+    0
+   ]
+  }
+ },
+ "version": 0.4
+}
