@@ -19,6 +19,8 @@ button:hover{border-color:var(--acc)}
 button.primary{background:var(--acc);color:#0b1020;border:none;font-weight:600}
 button.stop{background:#d9534f;color:#fff;border:none;font-weight:700;padding:8px 16px}
 button.stop:hover{background:#c9302c}
+button.stop:disabled{background:#5a3a3a;color:#c9b5b5;cursor:default}
+button.primary:disabled{opacity:.5;cursor:default}
 .stopped-line{color:#e0a43a;font-weight:600}
 button.yes{background:var(--ok);color:#06120b;border:none;font-weight:600;padding:8px 22px}
 button.no{background:var(--bad);color:#1a0606;border:none;font-weight:600;padding:8px 22px}
@@ -130,7 +132,7 @@ nav#chats{width:252px;flex:none;background:#181b20;border-right:1px solid var(--
     <form id="form" onsubmit="send(event)">
       <textarea id="input" placeholder="Ask about ComfyUI, a workflow, models… (Enter = send, Shift+Enter = new line, drop a workflow or picture here)"></textarea>
       <button class="primary" id="sendbtn" type="submit">Send</button>
-      <button class="stop" id="stopbtn" type="button" onclick="stopAI()" title="Stop the AI (Esc)" style="display:none">■ Stop</button>
+      <button class="stop" id="stopbtn" type="button" onclick="stopAI()" title="Stop the AI (Esc)" disabled>■ Stop</button>
     </form>
     <div class="hint">Answers come from your local model + tools. Items it could not verify are marked ⚠. Bigger local models (Qwen3.8 27B, -c 32768+) give much better results.</div>
     <div class="credit" style="text-align:right;font-size:10px;opacity:.35;margin-top:4px">Built by Florence for the community.</div>
@@ -231,7 +233,7 @@ class Turn{
 
 let running=null;   // {ctl, turn} while the AI is working
 function setBusy(b){busy=b; const s=document.getElementById('sendbtn'), x=document.getElementById('stopbtn');
-  s.disabled=b; s.style.display=b?'none':''; x.style.display=b?'':'none'; x.disabled=false; x.textContent='■ Stop'}
+  s.disabled=b; x.disabled=!b; x.textContent='■ Stop'}
 async function stopAI(){
   if(!running)return; const R=running, x=document.getElementById('stopbtn'); x.disabled=true; x.textContent='Stopping…';
   R.stopping=true;
