@@ -15,7 +15,7 @@ import urllib.error
 import urllib.request
 import zipfile
 
-from .hfcore import HostGuard, check_url
+from .hfcore import HostGuard, _fetch, check_url
 from .util import IS_WIN, gib, say
 
 API = "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=%d"
@@ -34,7 +34,12 @@ def releases(n=15):
     for attempt in range(3):
         try:
             with _open(API % n, 40, {"Accept": "application/vnd.github+json"}) as r:
-                return json.loads(r.read().decode("utf-8"))
+                d = json.loads(r.read().decode("utf-8"))
+            return [x for x in d if isinstance(x, dict)] if isinstance(d, list) else []
+        except ValueError:                      # not JSON (proxy page, cut-off answer)
+            if attempt == 2:
+                raise RuntimeError("GitHub's release list could not be read (the answer was not valid JSON)")
+            time.sleep(5)
         except urllib.error.HTTPError as ex:
             if ex.code in (403, 429) and attempt < 2:
                 time.sleep(10 * (attempt + 1)); continue
@@ -71,12 +76,14 @@ def wanted_assets(os_name, arch, backend, cuda_driver=None):
 
 def pick_release(rels, patterns):
     """Newest release named bNNNN that has every wanted file (the 'latest' tag can be a non-binary release)."""
-    rels = sorted([r for r in rels if re.fullmatch(r"b\d+", r.get("tag_name", "")) and not r.get("draft")],
+    rels = sorted([r for r in rels if isinstance(r, dict) and isinstance(r.get("tag_name"), str)
+                   and re.fullmatch(r"b\d+", r["tag_name"]) and not r.get("draft")],
                   key=lambda r: int(r["tag_name"][1:]), reverse=True)
     for r in rels:
         got = []
         for pat in patterns:
-            a = next((a for a in r.get("assets", []) if re.match(pat, a["name"])), None)
+            a = next((a for a in (r.get("assets") or []) if isinstance(a, dict) and isinstance(a.get("name"), str)
+                      and isinstance(a.get("browser_download_url"), str) and re.match(pat, a["name"])), None)
             if not a:
                 break
             got.append(a)
@@ -85,45 +92,40 @@ def pick_release(rels, patterns):
     return None, []
 
 
+class _Opener:
+    """Gives hfcore's resumable fetcher the GitHub host allow-list."""
+
+    @staticmethod
+    def open(url, headers=None, timeout=60):
+        return _open(url, timeout, headers)
+
+
 def download(url, dest, size, sha256):
+    """Resumable, size + SHA-256 checked. A bad partial file is deleted and fetched once more before giving up."""
     part = dest + ".part"
-    have = os.path.getsize(part) if os.path.exists(part) else 0
-    h = hashlib.sha256()
-    if have:
-        with open(part, "rb") as f:
-            for b in iter(lambda: f.read(8 << 20), b""):
-                h.update(b)
-    for attempt in range(5):
+    try:
+        size = int(size) if size and int(size) > 0 else None
+    except (TypeError, ValueError):
+        size = None
+    name = os.path.basename(dest)
+    for round_ in (1, 2):
+        have, h, server_size, err = _fetch(_Opener, url, part, name, size)
+        print()
+        if err:
+            raise RuntimeError("download of %s failed: %s" % (name, err))
+        want = size or server_size
+        if want and have < want:
+            raise RuntimeError("download incomplete (%d of %d bytes) - run setup again to resume" % (have, want))
+        if (not want or have == want) and (not sha256 or h.hexdigest() == sha256):
+            os.replace(part, dest)
+            return dest
         try:
-            with _open(url, 60, {"Range": "bytes=%d-" % have} if have else None) as r:
-                mode = "ab" if have and r.status == 206 else "wb"
-                if mode == "wb":
-                    have, h = 0, hashlib.sha256()
-                with open(part, mode) as out:
-                    last = 0
-                    for b in iter(lambda: r.read(4 << 20), b""):
-                        out.write(b); h.update(b); have += len(b)
-                        if time.time() - last > 2:
-                            last = time.time()
-                            print("\r   %s  %.0f / %.0f MB   " % (os.path.basename(dest), have / 1e6, (size or 0) / 1e6), end="", flush=True)
-            break
-        except (urllib.error.URLError, TimeoutError, OSError) as ex:
-            say("\n   connection problem (%s), retrying..." % ex)
-            time.sleep(4 * (attempt + 1))
-            have = os.path.getsize(part) if os.path.exists(part) else 0
-            h = hashlib.sha256()
-            if have:
-                with open(part, "rb") as f:
-                    for b in iter(lambda: f.read(8 << 20), b""):
-                        h.update(b)
-    print()
-    if size and have != size:
-        raise RuntimeError("download incomplete (%d of %d bytes) - run setup again to resume" % (have, size))
-    if sha256 and h.hexdigest() != sha256:
-        os.replace(part, dest + ".bad-sha")
-        raise RuntimeError("SHA-256 mismatch for %s - file NOT used" % os.path.basename(dest))
-    os.replace(part, dest)
-    return dest
+            os.remove(part)
+        except OSError:
+            pass
+        if round_ == 1:
+            say("   %s did not match its size / SHA-256 - deleted, downloading once more" % name)
+    raise RuntimeError("%s did not match its size / SHA-256 twice - file NOT used" % name)
 
 
 def _safe_extract(archive, to):
@@ -176,7 +178,7 @@ def install(engine_dir, hw, log=say, rels=None):
         sha = digest.split(":", 1)[1] if digest.startswith("sha256:") else None
         if not sha:
             raise RuntimeError("GitHub did not publish a SHA-256 for %s - refusing to use it" % a["name"])
-        log("   llama.cpp %s: %s (%.0f MB)" % (tag, a["name"], a["size"] / 1e6))
+        log("   llama.cpp %s: %s (%.0f MB)" % (tag, a["name"], (a.get("size") or 0) / 1e6))
         path = os.path.join(dl, a["name"])
         if os.path.exists(path):
             with open(path, "rb") as f:
@@ -184,7 +186,7 @@ def install(engine_dir, hw, log=say, rels=None):
             if not ok:
                 os.remove(path)
         if not os.path.exists(path):
-            download(a["browser_download_url"], path, a["size"], sha)
+            download(a["browser_download_url"], path, a.get("size"), sha)
         log("   SHA-256 verified")
         _safe_extract(path, staging)
     exe = "llama-server.exe" if IS_WIN or os_name == "windows" else "llama-server"

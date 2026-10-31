@@ -41,7 +41,8 @@ def _search(hf, term, author, sort, limit):
     if author:
         params.append(("author", author))
     params += [("expand[]", x) for x in hf.EXPAND]
-    return hf.get_json("/api/models", params) or []
+    d = hf.get_json("/api/models", params)
+    return [x for x in d if isinstance(x, dict)] if isinstance(d, list) else []
 
 
 def read_header(hf, repo, path):
@@ -148,7 +149,7 @@ class Searcher:
         with cf.ThreadPoolExecutor(4) as ex:
             for res in ex.map(lambda j: _search(self.hf, *j), jobs):
                 for info in res or []:
-                    if info.get("id") and info["id"] not in seen:
+                    if isinstance(info.get("id"), str) and "/" in info["id"] and info["id"] not in seen:
                         seen[info["id"]] = info
         self.log("  looked at %d Hugging Face repos (%d searches)" % (len(seen), len(jobs)))
         return [H.Cand(i) for i in seen.values()]
@@ -264,22 +265,31 @@ class Searcher:
             c.bpw = chosen["bpw"]
             if vision or (mm and MODES[mode_key].get("want_vision")):
                 c.mmproj = mm
-            # card evidence
+        except Exception as ex:  # one bad repo must not stop the search
+            c.ok = False
+            c.warnings.append("could not read repo: %s" % ex)
+            return c
+        try:  # card evidence is a bonus: a card that cannot be read does not drop an otherwise good model
             c.stats = H.card_stats(self.hf.readme(c.id))
             for bm in c.base_models[:2]:
                 if not c.stats.get("refusals") and "/" in bm:
                     for k, v in H.card_stats(self.hf.readme(bm)).items():
                         c.stats.setdefault(k, v)
-        except Exception as ex:  # one bad repo must not stop the search
-            c.ok = False
-            c.warnings.append("could not read repo: %s" % ex)
+        except Exception:
+            c.stats = c.stats if isinstance(c.stats, dict) else {}
         return c
 
     def score(self, mode_key, c):
-        s = c.pre
-        R, W = c.reasons, c.warnings
+        """Only candidates that detail() fully filled in get a score; anything else is marked not ok and skipped."""
         f = c.fit
-        s += 12 * math.log2(max(0.5, c.size_b)) * 0.5 + _quant_bonus(c.bpw) * (2 if self.b.speed == "quality" else 1)
+        if not c.ok or not isinstance(f, dict) or not f.get("fits") or not isinstance(c.files, dict) \
+                or not c.files.get("files") or not isinstance(f.get("tps"), (int, float)):
+            c.ok = False
+            return c
+        s = getattr(c, "pre", 0.0)
+        R, W = c.reasons, c.warnings
+        s += 12 * math.log2(max(0.5, c.size_b or 0.5)) * 0.5 + _quant_bonus(getattr(c, "bpw", None)) * (
+            2 if self.b.speed == "quality" else 1)
         tps = f["tps"]
         pen = -15 if tps < 5 else -8 if tps < 10 else -3 if tps < 20 else 0
         s += pen * (2 if self.b.speed == "fast" else 0.5 if self.b.speed == "quality" else 1)
@@ -296,7 +306,7 @@ class Searcher:
         if c.author.lower() in self.trusted:
             R.append("from a well-known uploader (%s)" % c.author)
         R.append("%s downloads, %s likes" % (f"{c.downloads:,}", c.likes))
-        R.insert(0, "runs on: %s, about %d words/s (rough guess)" % (f["where"], max(1, round(tps * 0.75))))
+        R.insert(0, "runs on: %s, about %d words/s (rough guess)" % (f.get("where", "?"), max(1, round(tps * 0.75))))
         c.score = round(s, 1)
         return c
 
@@ -308,7 +318,8 @@ class Searcher:
         self.log("  checking files and memory fit of the %d most promising..." % len(top))
         with cf.ThreadPoolExecutor(4) as ex:
             done = list(ex.map(lambda c: self.detail(mode_key, c), top))
-        good = sorted((self.score(mode_key, c) for c in done if c.ok), key=lambda c: c.score, reverse=True)
+        scored = [self.score(mode_key, c) for c in done if c.ok]
+        good = sorted((c for c in scored if c.ok), key=lambda c: c.score, reverse=True)
         return [to_choice(mode_key, c) for c in good[:top_n]], [e for e in self.hf.errors][:5]
 
 
@@ -332,11 +343,15 @@ def to_choice(mode_key, c):
 
 def fill_sizes(hf, choice):
     """Per-file sizes for split GGUFs (needed for verified downloads)."""
-    if all(f.get("size") for f in choice["files"]):
+    files = [f for f in (choice.get("files") or []) if isinstance(f, dict)]
+    if all(f.get("size") for f in files):
         return choice
-    sizes = {f.get("path"): (f.get("size") or (f.get("lfs") or {}).get("size")) for f in hf.tree(choice["repo"])}
-    for f in choice["files"]:
-        f["size"] = sizes.get(f["path"]) or f.get("size")
+    sizes = {}
+    for t in hf.tree(choice["repo"]):
+        lfs = t.get("lfs") if isinstance(t.get("lfs"), dict) else {}
+        sizes[t.get("path")] = t.get("size") or lfs.get("size")
+    for f in files:
+        f["size"] = sizes.get(f.get("path")) or f.get("size")
     return choice
 
 

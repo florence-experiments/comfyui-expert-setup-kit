@@ -51,7 +51,7 @@ def _civ(path: str, params: dict | None = None):
         raise RegionBlocked(data.get("error"))
     if code == 401:
         raise ToolError("Civitai said 401 Unauthorized - set CIVITAI_API_KEY in .env")
-    if code != 200 or data is None:
+    if code != 200 or not isinstance(data, dict):
         raise ToolError(f"Civitai HTTP {code}: {r.text[:300]}")
     return data
 
@@ -332,8 +332,11 @@ def archive_get_page(url: str):
     m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', r.text, re.S)
     if not m:
         raise ToolError(f"Could not read page (HTTP {r.status_code})")
-    p = json.loads(m.group(1)).get("props", {}).get("pageProps", {})
-    d = p.get("model") or {}
+    try:
+        p = json.loads(m.group(1)).get("props", {}).get("pageProps", {})
+        d = p.get("model") or {}
+    except (ValueError, AttributeError):
+        raise ToolError("CivArchive page data could not be read (the site may have changed)")
     v = d.get("version") or {}
     res = {"name": d.get("name"), "type": d.get("type"), "platform": d.get("platform"), "nsfw": d.get("is_nsfw"),
            "tags": (d.get("tags") or [])[:10], "base_model": v.get("baseModel"),

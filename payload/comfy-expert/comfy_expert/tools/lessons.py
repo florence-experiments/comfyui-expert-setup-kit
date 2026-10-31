@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import threading
 import time
 import uuid
@@ -51,16 +52,28 @@ def _similar(a: str, b: str) -> float:
 def load() -> list[dict]:
     p = path()
     try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-        return data.get("lessons", []) if isinstance(data, dict) else []
-    except (OSError, ValueError):
+        raw = p.read_text(encoding="utf-8")
+    except OSError:
         return []
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        data = None
+    items = data.get("lessons") if isinstance(data, dict) else None
+    if not isinstance(items, list):
+        # damaged file: keep a copy before the next save replaces it, so no lesson is silently lost
+        try:
+            shutil.copy2(p, p.with_name(p.name + ".corrupt-" + time.strftime("%Y%m%d-%H%M%S")))
+        except OSError:
+            pass
+        return []
+    return [x for x in items if isinstance(x, dict)]
 
 
 def _save(items: list[dict]) -> None:
     p = path()
     p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(".tmp")
+    tmp = p.with_name(f".{p.name}.{os.getpid()}.tmp")
     tmp.write_text(json.dumps({"version": 1, "lessons": items}, indent=1, ensure_ascii=False), encoding="utf-8")
     os.replace(tmp, p)
 

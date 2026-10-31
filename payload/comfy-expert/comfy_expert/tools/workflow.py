@@ -8,9 +8,11 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
+import requests
+
 from .net import human_size
 from . import tool, ToolError
-from .comfy import get_object_info, comfy_url, comfy_alive
+from .comfy import get_object_info, comfy_url, comfy_alive, cancel_prompts
 from .net import session
 from . import wfcore
 from ..config import load_config, APP_DIR, PKG_DIR
@@ -311,34 +313,51 @@ def comfy_queue_test(source: str, wait_seconds: int = 120, confirm: bool = False
     if not confirm:
         return {"dry_run": True, "would_queue": where, "nodes": len(api), "comfy": comfy_url(),
                 "message": "Ask the user to approve, then call again with confirm=true."}
+    from . import TURN
+    turn = TURN.get()
+    if turn is not None and turn.stop.is_set():
+        return {"queued": False, "status": "stopped by the user"}
     cid = uuid.uuid4().hex
-    r = session().post(comfy_url() + "/prompt", json={"prompt": api, "client_id": cid}, timeout=60)
+    url = comfy_url()
+    r = session().post(url + "/prompt", json={"prompt": api, "client_id": cid}, timeout=60)
     try:
         d = r.json()
     except ValueError:
         d = {"raw": r.text[:500]}
+    if not isinstance(d, dict):
+        d = {"raw": str(d)[:500]}
     if r.status_code != 200:
         return {"ok": False, "queued": False, "status": r.status_code, "comfy_error": d.get("error"),
                 "node_errors": d.get("node_errors")}
     pid = d.get("prompt_id")
-    from . import TURN
-    turn = TURN.get()
-    if turn is not None and pid:      # remember it so the Stop button can cancel it
+    if not isinstance(pid, str) or not pid:
+        return {"ok": False, "queued": False, "status": r.status_code, "error": "ComfyUI did not return a prompt_id",
+                "reply": str(d)[:300]}
+    if turn is not None:              # remember it so the Stop button can cancel it
+        turn.comfy_url = url
         turn.comfy_prompts.append(pid)
-        turn.comfy_url = comfy_url()
+        if turn.stop.is_set():        # Stop was pressed while the job was being sent: cancel it now
+            return {"queued": True, "prompt_id": pid, "status": "stopped by the user", "comfy": cancel_prompts(url, [pid])}
     t0 = time.time()
     while time.time() - t0 < max(5, min(int(wait_seconds or 120), 1800)):
         if turn is not None and turn.stop.wait(2):
-            return {"queued": True, "prompt_id": pid, "status": "stopped by the user"}
+            return {"queued": True, "prompt_id": pid, "status": "stopped by the user", "comfy": cancel_prompts(url, [pid])}
         if turn is None:
             time.sleep(2)
-        h = session().get(f"{comfy_url()}/history/{pid}", timeout=20).json()
-        if pid in h:
-            item = h[pid]
-            st = item.get("status") or {}
+        try:
+            h = session().get(f"{url}/history/{pid}", timeout=20).json()
+        except (requests.RequestException, ValueError):
+            continue                  # ComfyUI busy or restarting: try again until wait_seconds
+        item = h.get(pid) if isinstance(h, dict) else None
+        if isinstance(item, dict):
+            st = item.get("status") if isinstance(item.get("status"), dict) else {}
+            outs = item.get("outputs") if isinstance(item.get("outputs"), dict) else {}
             files = [f"{img.get('subfolder', '')}/{img.get('filename')}".lstrip("/")
-                     for o in (item.get("outputs") or {}).values() for img in o.get("images", []) + o.get("gifs", [])]
-            msgs = [m for m in st.get("messages", []) if m and m[0] in ("execution_error", "execution_interrupted")]
+                     for o in outs.values() if isinstance(o, dict)
+                     for img in (o.get("images") if isinstance(o.get("images"), list) else [])
+                     + (o.get("gifs") if isinstance(o.get("gifs"), list) else []) if isinstance(img, dict)]
+            msgs = [m for m in (st.get("messages") if isinstance(st.get("messages"), list) else [])
+                    if isinstance(m, (list, tuple)) and len(m) > 1 and m[0] in ("execution_error", "execution_interrupted")]
             return {"queued": True, "prompt_id": pid, "status": st.get("status_str"), "completed": st.get("completed"),
                     "outputs": files, "errors": [m[1] for m in msgs][:3]}
     return {"queued": True, "prompt_id": pid, "status": "still running", "note": "Check the ComfyUI window."}

@@ -71,15 +71,20 @@ def model_dir(root, repo):
 
 def download(hf, root, choice):
     """Downloads every file of the choice (resumable, SHA-256 checked). Returns (ok, model_path, mmproj_path)."""
+    files = choice.get("files") if isinstance(choice, dict) else None
+    if not isinstance(choice.get("repo") if isinstance(choice, dict) else None, str) or not isinstance(files, list) or not files \
+            or not all(isinstance(f, dict) and isinstance(f.get("path"), str) and f["path"] for f in files):
+        say("   the chosen model has no usable file list - pick another model")
+        return False, None, None
     d = model_dir(root, choice["repo"])
     paths = []
-    for f in choice["files"]:
+    for f in files:
         ok, p = H.download_file(hf, choice["repo"], f["path"], d, f.get("size"), f.get("sha256"))
         if not ok:
             return False, None, None
         paths.append(p)
     mm = None
-    if choice.get("mmproj"):
+    if isinstance(choice.get("mmproj"), dict) and isinstance(choice["mmproj"].get("path"), str):
         m = choice["mmproj"]
         ok, mm = H.download_file(hf, choice["repo"], m["path"], d, m.get("size"), m.get("sha256"))
         if not ok:

@@ -362,7 +362,7 @@ def can_see(base: str, timeout: float = 5) -> bool | None:
         j = requests.get(_root(base) + "/props", timeout=timeout).json()
     except Exception:
         return None
-    mod = j.get("modalities")
+    mod = j.get("modalities") if isinstance(j, dict) else None
     if isinstance(mod, dict) and "vision" in mod:
         return bool(mod["vision"])
     return None
@@ -421,6 +421,10 @@ def image_to_prompt(image: str, notes: str = ""):
         raise ToolError(f"Vision model not reachable at {ep['base_url']}: {e}") from e
     if r.status_code != 200:
         raise ToolError(f"Vision model HTTP {r.status_code}: {r.text[:400]}")
-    msg = r.json()["choices"][0]["message"]
-    return {"image": str(img), "vision_endpoint": ep["base_url"], "answer": (msg.get("content") or "").strip(),
+    try:
+        msg = r.json()["choices"][0]["message"]
+        answer = msg.get("content") or ""
+    except (ValueError, KeyError, IndexError, TypeError, AttributeError):
+        raise ToolError(f"Vision model sent an answer in an unexpected format: {r.text[:300]}")
+    return {"image": str(img), "vision_endpoint": ep["base_url"], "answer": str(answer).strip(),
             "installed_models": inv}

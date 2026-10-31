@@ -34,6 +34,7 @@ import requests
 from .config import APP_DIR, load_config
 from .safety import with_safety_rule
 from .tools import REGISTRY, TURN, Stopped, load_all, run_tool
+from .tools.net import _Session
 
 THINK_RE = re.compile(r"<think>.*?</think>", re.S)
 TOOLCALL_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.S)
@@ -132,7 +133,7 @@ class Agent:
         load_all()
         self.llm = self.cfg["llm"]
         self._model: str | None = self.llm.get("model") or None
-        self.http = requests.Session()
+        self.http = _Session()             # 127.0.0.1 (llama-server) never goes through a proxy
         self._known_nodes: set[str] | None = None
 
     # ------------------------------------------------------------- LLM
@@ -231,7 +232,12 @@ class Agent:
                 hint = " (Start llama-server with --jinja so tool calling works.)"
             raise LLMError(f"llama-server HTTP {r.status_code}: {txt}{hint}")
         if not body["stream"]:
-            msg = r.json()["choices"][0]["message"]
+            try:
+                msg = r.json()["choices"][0]["message"]
+            except (ValueError, KeyError, IndexError, TypeError) as e:
+                raise LLMError(f"llama-server sent an answer in an unexpected format: {r.text[:300]}") from e
+            if not isinstance(msg, dict):
+                raise LLMError(f"llama-server sent an answer in an unexpected format: {r.text[:300]}")
             yield {"message": msg}
             return
         content, reasoning, calls = [], [], {}
@@ -248,25 +254,32 @@ class Agent:
                 chunk = json.loads(payload)
             except ValueError:
                 continue
+            if not isinstance(chunk, dict):
+                continue
             if "error" in chunk:
                 raise LLMError(f"llama-server error: {chunk['error']}")
-            for ch in chunk.get("choices") or []:
-                d = ch.get("delta") or {}
-                if d.get("reasoning_content"):
+            for ch in chunk.get("choices") if isinstance(chunk.get("choices"), list) else []:
+                d = ch.get("delta") if isinstance(ch, dict) else None
+                if not isinstance(d, dict):
+                    continue
+                if isinstance(d.get("reasoning_content"), str) and d["reasoning_content"]:
                     reasoning.append(d["reasoning_content"])
                     yield {"thinking": d["reasoning_content"]}
-                if d.get("content"):
+                if isinstance(d.get("content"), str) and d["content"]:
                     content.append(d["content"])
                     yield {"delta": d["content"]}
-                for tc in d.get("tool_calls") or []:
-                    i = tc.get("index", len(calls))
+                for tc in d.get("tool_calls") if isinstance(d.get("tool_calls"), list) else []:
+                    if not isinstance(tc, dict):
+                        continue
+                    i = tc.get("index")
+                    i = i if isinstance(i, int) else len(calls)
                     slot = calls.setdefault(i, {"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
-                    if tc.get("id"):
+                    if isinstance(tc.get("id"), str) and tc["id"]:
                         slot["id"] = tc["id"]
-                    fn = tc.get("function") or {}
-                    if fn.get("name"):
+                    fn = tc.get("function") if isinstance(tc.get("function"), dict) else {}
+                    if isinstance(fn.get("name"), str):
                         slot["function"]["name"] += fn["name"]
-                    if fn.get("arguments"):
+                    if isinstance(fn.get("arguments"), str):
                         slot["function"]["arguments"] += fn["arguments"]
         msg = {"role": "assistant", "content": "".join(content)}
         if reasoning:
@@ -279,36 +292,46 @@ class Agent:
     @staticmethod
     def parse_tool_calls(msg: dict) -> tuple[str, list[dict]]:
         """Return (clean_text, calls[{id,name,args}]) handling text-embedded <tool_call> fallbacks."""
-        text = msg.get("content") or ""
+        text = msg.get("content") if isinstance(msg, dict) else ""
+        text = text if isinstance(text, str) else ""
+        msg = msg if isinstance(msg, dict) else {}
         text = THINK_RE.sub("", text)
         if "<think>" in text and "</think>" not in text:   # unterminated reasoning
             text = text.split("<think>")[0]
         if "</think>" in text:
             text = text.split("</think>", 1)[1]
         calls = []
-        for tc in msg.get("tool_calls") or []:
-            fn = tc.get("function") or {}
+        for tc in msg.get("tool_calls") if isinstance(msg.get("tool_calls"), list) else []:
+            if not isinstance(tc, dict):
+                continue
+            fn = tc.get("function") if isinstance(tc.get("function"), dict) else {}
             args = fn.get("arguments")
             if isinstance(args, str):
                 try:
                     args = json.loads(args) if args.strip() else {}
                 except ValueError:
                     args = {"__invalid_json__": args}
-            calls.append({"id": tc.get("id") or "call_" + uuid.uuid4().hex[:8], "name": fn.get("name", ""), "args": args or {}})
+            if args is not None and not isinstance(args, dict):
+                args = {"__invalid_json__": json.dumps(args)[:2000]}
+            name = fn.get("name") if isinstance(fn.get("name"), str) else ""
+            cid = tc.get("id") if isinstance(tc.get("id"), str) and tc.get("id") else "call_" + uuid.uuid4().hex[:8]
+            calls.append({"id": cid, "name": name, "args": args or {}})
         if not calls:
             for m in TOOLCALL_RE.finditer(text):
                 try:
                     obj = json.loads(m.group(1))
                 except ValueError:
                     continue
-                name = obj.get("name")
-                if name:
+                name = obj.get("name") if isinstance(obj, dict) else None
+                if isinstance(name, str) and name:
                     args = obj.get("arguments") or obj.get("parameters") or {}
                     if isinstance(args, str):
                         try:
                             args = json.loads(args)
                         except ValueError:
                             args = {}
+                    if not isinstance(args, dict):
+                        args = {}
                     calls.append({"id": "call_" + uuid.uuid4().hex[:8], "name": name, "args": args})
             if calls:
                 text = TOOLCALL_RE.sub("", text)
@@ -894,5 +917,6 @@ def save_session(session: Session) -> Path:
     d = APP_DIR / "cache" / "sessions"
     d.mkdir(parents=True, exist_ok=True)
     p = d / f"{session.id}.json"
-    p.write_text(json.dumps(session.to_json(), ensure_ascii=False, indent=1), encoding="utf-8")
+    from .chats import atomic_write_text
+    atomic_write_text(p, json.dumps(session.to_json(), ensure_ascii=False, indent=1, default=str))
     return p

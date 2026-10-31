@@ -149,6 +149,8 @@ def extra_model_path_roots(comfy_root: Path) -> list[Path]:
     except Exception:
         return []
     roots: list[Path] = []
+    if not isinstance(data, dict):
+        return []
     for _name, section in data.items():
         if not isinstance(section, dict):
             continue
@@ -179,7 +181,12 @@ def load_config(path: str | os.PathLike | None = None, reload: bool = False) -> 
     cfg_path = Path(path or os.environ.get("COMFY_EXPERT_CONFIG") or APP_DIR / "config.yaml")
     user: dict = {}
     if cfg_path.is_file():
-        user = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+        try:
+            user = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+        except (yaml.YAMLError, UnicodeDecodeError) as e:
+            raise SystemExit(f"{cfg_path} could not be read ({type(e).__name__}: {e}). Fix the file, or run setup again.")
+        if not isinstance(user, dict):
+            raise SystemExit(f"{cfg_path} must hold settings sections (llm:, comfyui:, ...). Fix the file, or run setup again.")
     cfg = Config(_merge(DEFAULTS, user))
     for env, (sec, key) in ENV_MAP.items():
         v = os.environ.get(env)

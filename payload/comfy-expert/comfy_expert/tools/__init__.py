@@ -46,6 +46,8 @@ def run_tool(name: str, args: dict | None) -> dict:
     t = REGISTRY.get(name)
     if t is None:
         return {"ok": False, "error": f"Unknown tool '{name}'. Available: {', '.join(sorted(REGISTRY))}"}
+    if args is not None and not isinstance(args, dict):
+        return {"ok": False, "error": "Tool arguments must be a JSON object", "schema": t.parameters}
     args = dict(args or {})
     allowed = set(t.parameters.get("properties", {}))
     unknown = [k for k in args if k not in allowed]

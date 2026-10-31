@@ -121,6 +121,14 @@ def file_url(cid: str, name: str) -> str:
     return f"/api/chats/{cid}/files/{name}"
 
 
+class DamagedChat(ValueError):
+    """A saved chat file exists but cannot be read (cut off, edited by hand, wrong format). It is never deleted."""
+
+
+def _dicts(x) -> list:
+    return [v for v in x if isinstance(v, dict)] if isinstance(x, list) else []
+
+
 class ChatStore:
     def __init__(self, root: Path | None = None, legacy: Path | None = None, uploads: Path | None = None):
         self.root = Path(root or CHATS_DIR)
@@ -159,14 +167,19 @@ class ChatStore:
 
     @staticmethod
     def session(rec: dict) -> Session:
+        if not isinstance(rec, dict) or not isinstance(rec.get("id"), str):
+            raise DamagedChat("not a chat record")
         s = Session(id=rec["id"])
-        s.title = rec.get("title") or ""
+        s.title = rec.get("title") if isinstance(rec.get("title"), str) else ""
         s.title_custom = bool(rec.get("title_custom"))
-        s.created = float(rec.get("created") or time.time())
-        s.updated = float(rec.get("updated") or s.created)
-        s.messages = list(rec.get("messages") or [])
-        s.display = list(rec.get("display") or [])
-        st = rec.get("state") or {}
+        try:
+            s.created = float(rec.get("created") or time.time())
+            s.updated = float(rec.get("updated") or s.created)
+        except (TypeError, ValueError):
+            s.created = s.updated = time.time()
+        s.messages = _dicts(rec.get("messages"))
+        s.display = _dicts(rec.get("display"))
+        st = rec.get("state") if isinstance(rec.get("state"), dict) else {}
         for k in _STATE:
             if k in st and st[k] is not None:
                 setattr(s, k, st[k])
@@ -195,7 +208,14 @@ class ChatStore:
         p = self.path(cid)
         if not p.is_file():
             raise KeyError(cid)
-        return json.loads(p.read_text(encoding="utf-8"))
+        try:
+            rec = json.loads(p.read_text(encoding="utf-8"))
+        except (ValueError, UnicodeDecodeError) as e:
+            raise DamagedChat(f"chat {cid} could not be read ({type(e).__name__}) - the file is kept as it is") from e
+        if not isinstance(rec, dict):
+            raise DamagedChat(f"chat {cid} is not a chat record - the file is kept as it is")
+        rec.setdefault("id", cid)
+        return rec
 
     def load(self, cid: str) -> Session:
         return self.session(self.load_record(cid))
@@ -238,20 +258,22 @@ class ChatStore:
                 rec = json.loads(p.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 continue
-            disp = rec.get("display") or []
+            if not isinstance(rec, dict):
+                continue
+            disp = _dicts(rec.get("display"))
             if q:
-                hay = (rec.get("title") or "") + "\n" + "\n".join(str(d.get("text") or "") for d in disp)
+                hay = str(rec.get("title") or "") + "\n" + "\n".join(str(d.get("text") or "") for d in disp)
                 if q not in hay.lower():
                     continue
-            thumb = next((f["url"] for d in disp if d.get("role") == "user"
-                          for f in d.get("files") or [] if f.get("kind") == "image"), None)
+            thumb = next((f.get("url") for d in disp if d.get("role") == "user"
+                          for f in _dicts(d.get("files")) if f.get("kind") == "image"), None)
             last = next((d.get("text") for d in reversed(disp) if d.get("text")), "")
-            out.append({"id": rec.get("id"), "title": rec.get("title") or "New chat", "mode": rec.get("mode", "normal"),
+            out.append({"id": rec.get("id") or p.stem, "title": str(rec.get("title") or "New chat"), "mode": rec.get("mode", "normal"),
                         "created": rec.get("created"), "updated": rec.get("updated"),
                         "turns": sum(1 for d in disp if d.get("role") == "user"),
                         "preview": re.sub(r"\s+", " ", re.sub(r"[#*`>|]", "", str(last)))[:120], "thumb": thumb,
                         "imported": bool(rec.get("imported_from"))})
-        out.sort(key=lambda r: r.get("updated") or 0, reverse=True)
+        out.sort(key=lambda r: r["updated"] if isinstance(r.get("updated"), (int, float)) else 0, reverse=True)
         return out
 
     # ------------------------------------------------------------ pictures / uploaded files
@@ -294,10 +316,10 @@ class ChatStore:
         return FILE_REF_RE.sub(repl, text or ""), files
 
     def file_path(self, cid: str, name: str) -> Path:
-        if not name or "/" in name or "\\" in name or name.startswith(".") or ".." in name:
-            raise KeyError(name)
+        if not name or "/" in name or "\\" in name or ":" in name or "\0" in name or name.startswith(".") or ".." in name:
+            raise KeyError(name)       # ':' too: on Windows 'C:x' would leave the chat folder
         p = self.files_dir(cid) / name
-        if not p.is_file():
+        if not p.is_file() or not _under(p, self.files_dir(cid)):
             raise KeyError(name)
         return p
 
@@ -309,8 +331,10 @@ class ChatStore:
         if marker.is_file():
             try:
                 done = json.loads(marker.read_text(encoding="utf-8"))
-            except ValueError:
+            except (ValueError, UnicodeDecodeError):
                 done = {}
+        if not isinstance(done, dict):
+            done = {}
         if not self.legacy.is_dir():
             return []
         new = []

@@ -61,8 +61,10 @@ def write_config(app, s):
     t = set_key(t, "ui", "port", str(s.get("ui_port") or 7860))
     t = set_key(t, "mcp", "port", str(s.get("mcp_port") or 8765))
     t = set_key(t, "hardware", "summary", q(s.get("hardware") or ""))
-    with open(path, "w", encoding="utf-8", newline="\n") as f:
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8", newline="\n") as f:          # atomic: a crash never leaves half a config
         f.write(t)
+    os.replace(tmp, path)
     env = os.path.join(app, ".env")
     if not os.path.exists(env):
         shutil.copy2(os.path.join(app, ".env.example"), env)

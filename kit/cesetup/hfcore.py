@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import http.client
 import json
 import os
 import re
@@ -15,6 +16,7 @@ import shutil
 import socket
 import struct
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -151,19 +153,43 @@ class HF:
         return os.path.join(self.cache_dir, prefix + hashlib.sha1(url.encode()).hexdigest() + ".json")
 
     def _cached(self, url, prefix=""):
+        """-> (cache path, data or None). A cache file that cannot be read or parsed (e.g. cut short by a crash)
+        is a miss: it is deleted and the data is fetched again."""
         if not self.cache_dir:
             return None, None
         cp = self._cache_path(url, prefix)
-        if os.path.exists(cp) and time.time() - os.path.getmtime(cp) < self.cache_s:
-            with open(cp, encoding="utf-8") as f:
-                return cp, json.load(f)
+        try:
+            if os.path.exists(cp) and time.time() - os.path.getmtime(cp) < self.cache_s:
+                with open(cp, encoding="utf-8") as f:
+                    return cp, json.load(f)
+        except (OSError, ValueError):          # ValueError covers JSONDecodeError and UnicodeDecodeError
+            try:
+                os.remove(cp)
+            except OSError:
+                pass
         return cp, None
 
     @staticmethod
     def _store(cp, data):
-        if cp and data is not None:
-            with open(cp, "w", encoding="utf-8") as f:
+        """Atomic write (temp file + os.replace) so a crash never leaves a half-written cache file.
+        The cache is only an optimisation: failing to write it is not an error."""
+        if not cp or data is None:
+            return
+        tmp = None
+        try:
+            fd, tmp = tempfile.mkstemp(prefix=".tmp-", suffix=".json", dir=os.path.dirname(cp))
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(data, f)
+            os.replace(tmp, cp)
+            tmp = None
+        except (OSError, TypeError, ValueError):
+            pass
+        finally:
+            if tmp:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
 
     def get_json(self, path, params=None):
         url = self.API + path
@@ -176,7 +202,15 @@ class HF:
             try:
                 self.calls += 1
                 with self.open(url, {"Accept": "application/json"}) as resp:
-                    data = json.loads(resp.read().decode("utf-8"))
+                    raw = resp.read()
+                try:
+                    data = json.loads(raw.decode("utf-8"))
+                except ValueError:                 # not JSON (proxy / captive portal page, cut-off body)
+                    if attempt < 3:
+                        time.sleep(1 + attempt)
+                        continue
+                    self.errors.append("%s -> the answer was not valid JSON" % path)
+                    return None
                 self._store(cp, data)
                 return data
             except urllib.error.HTTPError as ex:
@@ -196,7 +230,7 @@ class HF:
     def get_text(self, path, limit=400_000):
         url = self.API + path
         cp, hit = self._cached(url, "txt-")
-        if hit is not None:
+        if isinstance(hit, str):
             return hit
         try:
             self.calls += 1
@@ -222,14 +256,16 @@ class HF:
     def search(self, term, sort="lastModified", limit=50):
         params = [("search", term), ("filter", "gguf"), ("sort", sort), ("direction", "-1"), ("limit", str(limit))]
         params += [("expand[]", x) for x in self.EXPAND]
-        return self.get_json("/api/models", params) or []
+        d = self.get_json("/api/models", params)
+        return [x for x in d if isinstance(x, dict)] if isinstance(d, list) else []
 
     def model(self, repo):
-        return self.get_json("/api/models/" + repo, [("expand[]", x) for x in self.EXPAND])
+        d = self.get_json("/api/models/" + repo, [("expand[]", x) for x in self.EXPAND])
+        return d if isinstance(d, dict) else None
 
     def tree(self, repo):
         d = self.get_json("/api/models/%s/tree/main" % repo, {"recursive": "true"})
-        return d if isinstance(d, list) else []
+        return [x for x in d if isinstance(x, dict)] if isinstance(d, list) else []
 
     def readme(self, repo):
         return self.get_text("/%s/raw/main/README.md" % repo)
@@ -451,17 +487,17 @@ class Cand:
         self.author = self.id.split("/")[0]
         self.name = self.id.split("/", 1)[-1]
         self.info = info
-        self.downloads = info.get("downloads") or 0
-        self.likes = info.get("likes") or 0
+        self.downloads = info.get("downloads") if isinstance(info.get("downloads"), int) else 0
+        self.likes = info.get("likes") if isinstance(info.get("likes"), int) else 0
         self.modified = info.get("lastModified")
         self.created = info.get("createdAt")
         self.tags = [t.lower() for t in (info.get("tags") or []) if isinstance(t, str)]
-        card = info.get("cardData") or {}
+        card = info.get("cardData") if isinstance(info.get("cardData"), dict) else {}
         bm = card.get("base_model") or []
-        self.base_models = [bm] if isinstance(bm, str) else [b for b in bm if isinstance(b, str)]
-        gg = info.get("gguf") or {}
+        self.base_models = [bm] if isinstance(bm, str) else [b for b in bm if isinstance(b, str)] if isinstance(bm, list) else []
+        gg = info.get("gguf") if isinstance(info.get("gguf"), dict) else {}
         self.api_arch = gg.get("architecture")
-        self.api_params = gg.get("total")
+        self.api_params = gg.get("total") if isinstance(gg.get("total"), (int, float)) else None
         self.api_ctx = gg.get("context_length")
         self.size_b, self.active_b = parse_size(self.name)
         if self.api_params and not self.size_b:
@@ -509,15 +545,17 @@ def pick_files(tree, params_b=None):
     """GGUF quants in a repo -> {label: {'files': [...], 'size': n, 'sha': [...], 'bpw': x}} plus mmproj options.
     Files without a standard quant name (e.g. '...-21G-ICE.gguf', APEX builds) are keyed by their distinctive suffix."""
     quants, mmprojs, odd = {}, [], []
-    for f in tree:
-        if f.get("type") != "file":
+    for f in tree or []:
+        if not isinstance(f, dict) or f.get("type") != "file" or not isinstance(f.get("path"), str):
             continue
-        p = f.get("path", "")
+        p = f["path"]
         low = p.lower()
         if not low.endswith(".gguf"):
             continue
-        size = f.get("size") or (f.get("lfs") or {}).get("size") or 0
-        sha = (f.get("lfs") or {}).get("oid") or (f.get("lfs") or {}).get("sha256")
+        lfs = f.get("lfs") if isinstance(f.get("lfs"), dict) else {}
+        size = f.get("size") or lfs.get("size") or 0
+        size = size if isinstance(size, int) and size > 0 else 0
+        sha = lfs.get("oid") or lfs.get("sha256")
         if "mmproj" in low:
             mmprojs.append({"path": p, "size": size, "sha": sha})
             continue
@@ -573,42 +611,70 @@ def sha256_file(path, start_hash=None):
     return h
 
 
-def download_file(hf, repo, path, dest_dir, expected_size, expected_sha):
-    """Resumable download into dest_dir. Never overwrites: an existing complete file is verified and kept."""
-    os.makedirs(dest_dir, exist_ok=True)
-    name = path.rsplit("/", 1)[-1]
-    final = os.path.join(dest_dir, name)
-    part = final + ".part"
-    if os.path.exists(final):
-        say("   %s already exists - checking it instead of downloading" % name)
-        ok = os.path.getsize(final) == expected_size and (not expected_sha or sha256_file(final).hexdigest() == expected_sha)
-        say("   %s" % ("verified OK" if ok else "EXISTING FILE DOES NOT MATCH - left untouched, nothing downloaded"))
-        return ok, final
-    free = shutil.disk_usage(dest_dir).free
+SHA_RE = re.compile(r"^[0-9a-f]{64}$")
+RETRY_SLEEP = 5          # seconds; the tests set this to 0
+
+
+class _Restart(Exception):
+    """The partial file on disk cannot be resumed: delete it and start that file again."""
+
+
+def _content_range(resp):
+    """'bytes 100-199/1000' -> (100, 1000); total may be None ('*'). None when absent or unreadable."""
+    m = re.match(r"bytes\s+(\d+)-\d+/(\d+|\*)", resp.headers.get("Content-Range") or "")
+    if not m:
+        return None
+    return int(m.group(1)), (int(m.group(2)) if m.group(2) != "*" else None)
+
+
+def _remove(p):
+    try:
+        os.remove(p)
+    except OSError:
+        pass
+
+
+def _fetch(hf, url, part, name, expected_size):
+    """Download into `part`, resuming when possible. -> (bytes on disk, sha256 object, size the server reported,
+    error text or None). Network trouble is retried; a partial file that cannot be resumed is deleted and refetched."""
     have = os.path.getsize(part) if os.path.exists(part) else 0
-    if expected_size and free < (expected_size - have) + 2 * GiB:
-        say("   not enough free space on %s (%.1f GiB free, need %.1f)" % (dest_dir, gib(free), gib(expected_size - have) + 2))
-        return False, None
+    if expected_size and have > expected_size:
+        say("   the partial download is bigger than the file should be - deleting it and starting again")
+        _remove(part)
+        have = 0
+    if have and expected_size and have == expected_size:
+        say("   the partial download is already full size - checking it")
+        return have, sha256_file(part), expected_size, None
     h = hashlib.sha256()
     if have:
-        if expected_size and have > expected_size:
-            os.replace(part, part + ".oversize")
-            have = 0
-        else:
-            say("   resuming at %.2f GiB (re-hashing the part already on disk)" % gib(have))
-            h = sha256_file(part)
-    url = hf.file_url(repo, path)
+        say("   resuming at %.2f GiB (re-hashing the part already on disk)" % gib(have))
+        h = sha256_file(part)
+    server_size = None
     t0, last = time.time(), 0.0
+    restarts = 0
     for attempt in range(6):
         try:
             hdr = {"Range": "bytes=%d-" % have} if have else {}
             with hf.open(url, hdr, timeout=60) as resp:
-                if have and resp.status != 206:
-                    say("   server ignored resume; starting over")
-                    have, h = 0, hashlib.sha256()
-                    mode = "wb"
+                status = getattr(resp, "status", None) or resp.getcode()
+                cr = _content_range(resp)
+                if have and status == 206:
+                    if not cr or cr[0] != have:
+                        raise _Restart("the server resumed at the wrong place")
+                    mode = "ab"
+                    server_size = cr[1]
                 else:
-                    mode = "ab" if have else "wb"
+                    if have:
+                        say("   server ignored resume; starting over")
+                    have, h, mode = 0, hashlib.sha256(), "wb"
+                    try:
+                        server_size = int(resp.headers.get("Content-Length") or 0) or None
+                    except ValueError:
+                        server_size = None
+                if expected_size and server_size and server_size != expected_size:
+                    return have, h, server_size, ("the server says this file is %d bytes but the repo listing says %d"
+                                                  % (server_size, expected_size))
+                limit = expected_size or server_size
                 with open(part, mode) as out:
                     while True:
                         b = resp.read(4 * 1024 * 1024)
@@ -617,29 +683,112 @@ def download_file(hf, repo, path, dest_dir, expected_size, expected_sha):
                         out.write(b)
                         h.update(b)
                         have += len(b)
+                        if limit and have > limit:
+                            break                      # server sent more than the file size: verification fails below
                         if time.time() - last > 2:
                             last = time.time()
                             rate = have / max(1, last - t0)
-                            pct = 100 * have / expected_size if expected_size else 0
+                            pct = 100 * have / limit if limit else 0
                             sys.stdout.write("\r   %s  %5.1f%%  %.2f / %.2f GiB  %.1f MB/s   " % (
-                                name[:40], pct, gib(have), gib(expected_size), rate / 1e6))
+                                name[:40], pct, gib(have), gib(limit), rate / 1e6))
                             sys.stdout.flush()
-            break
-        except (urllib.error.URLError, socket.timeout, TimeoutError, ConnectionError) as ex:
-            say("\n   connection problem (%s), retrying in %ds..." % (ex, 5 * (attempt + 1)))
-            time.sleep(5 * (attempt + 1))
+            if limit and have < limit:
+                raise ConnectionError("connection closed early (%d of %d bytes)" % (have, limit))
+            return have, h, server_size, None
+        except _Restart as ex:
+            say("\n   %s - deleting the partial file and starting again" % ex)
+            _remove(part)
+            have, h = 0, hashlib.sha256()
+            restarts += 1
+            if restarts > 1:
+                return 0, h, server_size, "could not resume or restart the download"
+        except urllib.error.HTTPError as ex:
+            if ex.code == 416 and have:                 # range not satisfiable: the partial file is not resumable
+                say("\n   the server cannot resume this partial file - deleting it and starting again")
+                _remove(part)
+                have, h = 0, hashlib.sha256()
+                continue
+            if ex.code in (401, 403, 404, 410):
+                hint = " (this repo may need a Hugging Face token or accepting its licence)" if ex.code in (401, 403) else ""
+                return have, h, server_size, "HTTP %d from the server%s" % (ex.code, hint)
+            say("\n   server problem (HTTP %d), retrying in %ds..." % (ex.code, RETRY_SLEEP * (attempt + 1)))
+            time.sleep(RETRY_SLEEP * (attempt + 1))
             have = os.path.getsize(part) if os.path.exists(part) else 0
             h = sha256_file(part) if have else hashlib.sha256()
-    say("")
-    if expected_size and have != expected_size:
-        say("   incomplete (%d of %d bytes). Run again to resume." % (have, expected_size))
-        return False, None
-    got = h.hexdigest()
-    if expected_sha and got != expected_sha:
-        os.replace(part, final + ".bad-sha")
-        say("   SHA-256 MISMATCH - kept as %s.bad-sha for inspection, NOT used." % name)
-        return False, None
-    os.replace(part, final)
-    say("   done, SHA-256 verified" if expected_sha else "   done (no SHA-256 published for this file)")
-    return True, final
+        except (urllib.error.URLError, socket.timeout, TimeoutError, ConnectionError, http.client.HTTPException) as ex:
+            say("\n   connection problem (%s), retrying in %ds..." % (ex, RETRY_SLEEP * (attempt + 1)))
+            time.sleep(RETRY_SLEEP * (attempt + 1))
+            have = os.path.getsize(part) if os.path.exists(part) else 0
+            if expected_size and have > expected_size:
+                _remove(part)
+                have = 0
+            h = sha256_file(part) if have else hashlib.sha256()
+    return have, h, server_size, None
 
+
+def download_file(hf, repo, path, dest_dir, expected_size, expected_sha):
+    """Resumable download into dest_dir. Never overwrites: an existing complete file is verified and kept.
+    Success (True, path) only when the size matches and the SHA-256 matches (when one is published). A partial file
+    that turns out bad (too big, wrong size, wrong SHA-256, not resumable) is deleted and fetched again once."""
+    os.makedirs(dest_dir, exist_ok=True)
+    name = path.rsplit("/", 1)[-1]
+    final = os.path.join(dest_dir, name)
+    part = final + ".part"
+    try:
+        expected_size = int(expected_size) if expected_size and int(expected_size) > 0 else None
+    except (TypeError, ValueError):
+        expected_size = None
+    sha = (expected_sha or "").strip().lower() if isinstance(expected_sha, str) else ""
+    if sha and not SHA_RE.match(sha):
+        say("   the published checksum for %s is not a SHA-256 - ignoring it" % name)
+        sha = ""
+    if not sha:
+        say("   WARNING: no SHA-256 is published for %s - only its size can be checked" % name)
+    if os.path.exists(final):
+        say("   %s already exists - checking it instead of downloading" % name)
+        size_now = os.path.getsize(final)
+        if not expected_size and not sha:
+            say("   CANNOT VERIFY: neither the size nor a SHA-256 is known for this file - left untouched, not used")
+            return False, None
+        ok = (not expected_size or size_now == expected_size) and (not sha or sha256_file(final).hexdigest() == sha)
+        say("   %s" % (("verified OK" if sha else "size OK (no SHA-256 to check)") if ok
+                       else "EXISTING FILE DOES NOT MATCH - left untouched, nothing downloaded"))
+        return ok, (final if ok else None)
+    free = shutil.disk_usage(dest_dir).free
+    have = os.path.getsize(part) if os.path.exists(part) else 0
+    need = max(0, (expected_size or 0) - have)
+    if expected_size and free < need + 2 * GiB:
+        say("   not enough free space on %s (%.1f GiB free, need %.1f)" % (dest_dir, gib(free), gib(need) + 2))
+        return False, None
+    url = hf.file_url(repo, path)
+    for round_ in (1, 2):
+        have, h, server_size, err = _fetch(hf, url, part, name, expected_size)
+        say("")
+        if err:
+            say("   download failed: %s" % err)
+            return False, None
+        size = expected_size or server_size
+        if not size and not sha:
+            _remove(part)
+            say("   download FAILED: the size of %s is unknown and no SHA-256 is published, so it cannot be verified"
+                % name)
+            return False, None
+        if size and have < size:
+            say("   incomplete (%d of %d bytes). Run again to resume." % (have, size))
+            return False, None
+        problem = None
+        if size and have != size:
+            problem = "size mismatch (%d bytes, expected %d)" % (have, size)
+        elif sha and h.hexdigest() != sha:
+            problem = "SHA-256 mismatch"
+        if not problem:
+            os.replace(part, final)
+            say("   done, size and SHA-256 verified" if sha else
+                "   done, size verified (%d bytes) - WARNING: no SHA-256 published, contents not checked" % have)
+            return True, final
+        _remove(part)
+        if round_ == 1:
+            say("   %s - deleted the bad download, trying once more from the start" % problem)
+        else:
+            say("   download FAILED again (%s) - the bad file was deleted, nothing was installed" % problem)
+    return False, None

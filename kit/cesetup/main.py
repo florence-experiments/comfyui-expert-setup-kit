@@ -297,7 +297,9 @@ def hardware_summary(hw):
 
 def install(root, hw, comfy, link, mp, cplan, token, shortcuts):
     sp = os.path.join(root, "install.json")
-    st = read_json(sp, {}) or {}
+    st = read_json(sp, {})
+    if not isinstance(st, dict):
+        st = {}
     st.update({"kit_version": "1.0.0", "root": root, "installed": time.strftime("%Y-%m-%d")})
     if not IS_WIN:
         st["python"] = sys.executable
@@ -310,7 +312,7 @@ def install(root, hw, comfy, link, mp, cplan, token, shortcuts):
     say("\n[1/%d] AI engine" % N)
     if link and link.get("share"):
         say("   using HomeAI's engine")
-    elif not st.get("llama") or st["llama"].get("backend") != hw["backend"] or not os.path.isfile(control.llama_cmd(root, {"brain": {"model": "", "port": 0}})[0]):
+    elif not isinstance(st.get("llama"), dict) or st["llama"].get("backend") != hw["backend"] or not os.path.isfile(control.llama_cmd(root, {"brain": {"model": "", "port": 0}})[0]):
         info = llamacpp.install(os.path.join(root, "engine"), hw)
         st["llama"] = {"build": info["build"], "backend": info["backend"]}
         write_json(sp, st)
@@ -370,8 +372,10 @@ def install(root, hw, comfy, link, mp, cplan, token, shortcuts):
     say("\n[4/%d] ComfyUI" % N)
     comfy_start = None
     if comfy.get("fresh"):
-        d = comfyui.install(comfy.get("fresh_dir") or root, hw, cplan)
-        comfy.update({"root": d, "url": comfyui.DEFAULT_URL, "installed_by_kit": True,
+        old = st.get("comfyui") if isinstance(st.get("comfyui"), dict) else {}
+        d = comfyui.install(comfy.get("fresh_dir") or root, hw, cplan,
+                            known=old.get("root") if old.get("installed_by_kit") and isinstance(old.get("root"), str) else None)
+        comfy.update({"root": d, "url": comfyui.DEFAULT_URL, "installed_by_kit": comfyui.kit_installed(d),
                       "install_dir": os.path.dirname(d) if IS_WIN else d})
         comfy_start = comfyui.start_command(d, hw)
         say("   installed in %s" % d)
@@ -416,8 +420,15 @@ def main(argv=None):
     a = ap.parse_args(argv)
     answers = None
     if a.answers:
-        with open(a.answers, encoding="utf-8") as f:
-            answers = json.load(f)
+        try:
+            with open(a.answers, encoding="utf-8-sig") as f:
+                answers = json.load(f)
+        except (OSError, ValueError) as ex:
+            say("Could not read the answers file %s: %s" % (a.answers, ex))
+            return 2
+        if not isinstance(answers, dict):
+            say("The answers file %s must hold a JSON object ({...})." % a.answers)
+            return 2
     ask = Asker(answers)
     T = 7
     banner()

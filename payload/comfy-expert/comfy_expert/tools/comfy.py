@@ -7,6 +7,8 @@ import re
 import time
 from pathlib import Path
 
+import requests
+
 from . import tool, ToolError
 from .net import session, human_size
 from ..config import load_config, PKG_DIR
@@ -41,6 +43,38 @@ def comfy_alive(timeout: float = 3) -> bool:
         return r.status_code == 200
     except Exception:
         return False
+
+
+def _queue_ids(entries) -> list[str]:
+    """prompt ids from a /queue list; each entry is [number, prompt_id, ...]. Anything malformed is skipped."""
+    return [x[1] for x in (entries if isinstance(entries, list) else [])
+            if isinstance(x, (list, tuple)) and len(x) > 1 and isinstance(x[1], str)]
+
+
+def cancel_prompts(url: str, ids: list[str]) -> dict:
+    """Cancel only the given ComfyUI jobs (the ones this chat turn queued): pending ones are deleted from the queue,
+    a running one is interrupted. Jobs anyone else queued are never touched."""
+    ids = [i for i in dict.fromkeys(ids or []) if isinstance(i, str) and i]
+    if not ids or not url:
+        return {}
+    url = url.rstrip("/")
+    out: dict = {"prompts": ids}
+    try:
+        q = session().get(url + "/queue", timeout=5).json()
+        q = q if isinstance(q, dict) else {}
+        running, pending = _queue_ids(q.get("queue_running")), _queue_ids(q.get("queue_pending"))
+        mine_pending = [i for i in ids if i in pending]
+        if mine_pending:
+            session().post(url + "/queue", json={"delete": mine_pending}, timeout=5)
+            out["removed_from_queue"] = mine_pending
+        mine_running = [i for i in ids if i in running]
+        if mine_running:
+            # recent ComfyUI only interrupts when the running job is this prompt_id; older versions ignore the id
+            session().post(url + "/interrupt", json={"prompt_id": mine_running[0]}, timeout=5)
+            out["interrupted"] = mine_running
+    except (requests.RequestException, ValueError) as e:
+        out["error"] = str(e)[:300]
+    return out
 
 
 def scan_custom_node_names(custom_nodes_dir: Path) -> dict[str, str]:
@@ -86,7 +120,9 @@ def get_object_info(force: bool = False) -> tuple[dict, str]:
     try:
         r = session().get(comfy_url() + "/object_info", timeout=25)
         if r.status_code == 200:
-            data, source = r.json(), "live"
+            live = r.json()
+            if isinstance(live, dict) and live:          # anything else (an error page, a list...) = not usable
+                data, source = {k: v for k, v in live.items() if isinstance(k, str) and isinstance(v, dict)}, "live"
     except Exception:
         pass
     if data is None:
@@ -182,8 +218,10 @@ def comfy_status():
         r = session().get(comfy_url() + "/system_stats", timeout=5)
         if r.status_code == 200:
             d = r.json()
+            d = d if isinstance(d, dict) else {}
+            devs = d.get("devices") if isinstance(d.get("devices"), list) else []
             dev = [{"name": x.get("name"), "vram_total": human_size(x.get("vram_total")), "vram_free": human_size(x.get("vram_free"))}
-                   for x in d.get("devices", [])]
+                   for x in devs if isinstance(x, dict)]
             return {"running": True, "url": comfy_url(), "system": d.get("system"), "devices": dev}
     except Exception as e:
         return {"running": False, "url": comfy_url(), "error": str(e)[:200],

@@ -14,6 +14,7 @@ import os
 import re
 import shutil
 import string
+import tempfile
 import time
 
 from .util import IS_WIN, read_json, say, write_json
@@ -40,14 +41,17 @@ def inspect(root):
         return None
     st = read_json(os.path.join(root, "install.json"), None)
     if isinstance(st, dict) and os.path.isdir(os.path.join(root, "homeai")):
-        cfg = read_json(os.path.join(root, "homeai", "config.json"), {}) or {}
+        cfg = read_json(os.path.join(root, "homeai", "config.json"), {})
+        cfg = cfg if isinstance(cfg, dict) else {}
         ini = os.path.join(root, "engine", "models.ini")
+        models = st.get("models") if isinstance(st.get("models"), dict) else {}
+        models = {k: v for k, v in models.items() if isinstance(k, str) and isinstance(v, dict)}
+        llama_url = cfg.get("llama_url") if isinstance(cfg.get("llama_url"), str) and cfg.get("llama_url") else "http://127.0.0.1:%d" % HOMEAI_ENGINE_PORT
         return {"root": root, "kind": "kit", "state": st, "ini": ini if os.path.isfile(ini) else None,
-                "data": os.path.join(root, "homeai", "data"), "llama_url": cfg.get("llama_url") or "http://127.0.0.1:%d" % HOMEAI_ENGINE_PORT,
-                "port": cfg.get("port") or HOMEAI_APP_PORT, "models": sorted((st.get("models") or {}).keys()),
-                "model_info": st.get("models") or {}}
+                "data": os.path.join(root, "homeai", "data"), "llama_url": llama_url,
+                "port": cfg.get("port") or HOMEAI_APP_PORT, "models": sorted(models), "model_info": models}
     cfg = read_json(os.path.join(root, "config.json"), None)
-    if isinstance(cfg, dict) and cfg.get("llama_url") and os.path.isfile(os.path.join(root, "server.py")):
+    if isinstance(cfg, dict) and isinstance(cfg.get("llama_url"), str) and cfg.get("llama_url") and os.path.isfile(os.path.join(root, "server.py")):
         return {"root": root, "kind": "manual", "state": {}, "ini": None, "data": os.path.join(root, cfg.get("data_dir") or "data"),
                 "llama_url": cfg["llama_url"], "port": cfg.get("port") or HOMEAI_APP_PORT, "models": [], "model_info": {}}
     return None
@@ -63,11 +67,45 @@ def find():
 
 def _backup(path, made):
     if os.path.isfile(path):
-        b = "%s.bak-comfy-expert-%s" % (path, time.strftime("%Y%m%d-%H%M%S"))
+        b = base = "%s.bak-comfy-expert-%s" % (path, time.strftime("%Y%m%d-%H%M%S"))
+        n = 1
+        while os.path.exists(b):                       # never overwrite an earlier backup
+            n += 1
+            b = "%s-%d" % (base, n)
         shutil.copy2(path, b)
         made.append(b)
         return b
     return None
+
+
+def _read_text(path):
+    """-> (text with \n line ends, the file's own line end). Bytes are decoded as UTF-8 (a BOM is kept)."""
+    with open(path, "rb") as f:
+        raw = f.read()
+    nl = "\r\n" if b"\r\n" in raw else "\n"
+    return raw.decode("utf-8").replace("\r\n", "\n"), nl
+
+
+def _write_text(path, text, nl="\n"):
+    """Atomic replace (temp file in the same folder + os.replace), keeping the file's line ends and permissions."""
+    d = os.path.dirname(os.path.abspath(path))
+    fd, tmp = tempfile.mkstemp(prefix=".%s." % os.path.basename(path), suffix=".tmp", dir=d)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(text.replace("\n", nl).encode("utf-8"))
+            f.flush()
+            os.fsync(f.fileno())
+        try:
+            shutil.copymode(path, tmp)
+        except OSError:
+            pass
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def section_name(choice):
@@ -77,8 +115,10 @@ def section_name(choice):
 
 def add_section(h, name, model, mmproj, ctx, gpu=True, n_cpu_moe=0, backups=None):
     """Append our [section] to HomeAI's models.ini (idempotent). Returns the section name."""
-    ini = h["ini"]
-    text = open(ini, encoding="utf-8").read()
+    ini = h.get("ini")
+    if not ini or not os.path.isfile(ini):
+        raise RuntimeError("HomeAI's engine/models.ini was not found")
+    text, nl = _read_text(ini)
     if re.search(r"(?m)^\[%s\]\s*$" % re.escape(name), text):
         return name
     _backup(ini, backups if backups is not None else [])
@@ -91,8 +131,9 @@ def add_section(h, name, model, mmproj, ctx, gpu=True, n_cpu_moe=0, backups=None
         lines.append("n-cpu-moe = %d" % n_cpu_moe)
     lines += ["ctx-size = %d" % max(32768, int(ctx or 0)), "jinja = true", "flash-attn = on", "cache-type-k = q8_0",
               "cache-type-v = q8_0", ""]
-    with open(ini, "a", encoding="utf-8", newline="\n") as f:
-        f.write("\n".join(lines))
+    if text and not text.endswith("\n"):
+        text += "\n"
+    _write_text(ini, text + "\n".join(lines), nl)
     return name
 
 
@@ -103,7 +144,7 @@ def register_in_state(h, name, model, mmproj, ctx, n_cpu_moe=0, backups=None):
         return False
     sp = os.path.join(h["root"], "install.json")
     st = read_json(sp, None)
-    if not isinstance(st, dict) or name in (st.get("models") or {}):
+    if not isinstance(st, dict) or not isinstance(st.get("models") or {}, dict) or name in (st.get("models") or {}):
         return False
     _backup(sp, backups if backups is not None else [])
     st.setdefault("models", {})[name] = {"repo": "", "quant": "", "model": model, "files": [model] + ([mmproj] if mmproj else []),
@@ -113,27 +154,43 @@ def register_in_state(h, name, model, mmproj, ctx, n_cpu_moe=0, backups=None):
     return True
 
 
-def unregister_in_state(root, name):
+def unregister_in_state(root, name, backups=None):
+    """Removes only our entry (added_by=comfy-expert-kit), re-reading the current file so HomeAI's own changes stay."""
     sp = os.path.join(root or "", "install.json")
     st = read_json(sp, None)
-    if isinstance(st, dict) and (st.get("models") or {}).get(name, {}).get("added_by") == "comfy-expert-kit":
-        del st["models"][name]
+    models = st.get("models") if isinstance(st, dict) else None
+    ent = models.get(name) if isinstance(models, dict) else None
+    if isinstance(ent, dict) and ent.get("added_by") == "comfy-expert-kit":
+        _backup(sp, backups if backups is not None else [])
+        del models[name]
         write_json(sp, st)
         return True
     return False
 
 
-def remove_section(ini, name):
-    """Removes exactly our section (and the marker line above it). Anything else in the file is left alone."""
+def _section_re(name):
+    # our marker line (optional), the [name] header, then its key/blank lines - it stops at the next [section]
+    # and at comment lines, which belong to whatever follows
+    return re.compile(r"(?m)(?:^%s[ \t]*\n)?^\[%s\][ \t]*(?:\n|\Z)(?:(?![ \t]*[\[;#])[^\n]*\n)*(?:(?![ \t]*[\[;#])[^\n]+\Z)?"
+                      % (re.escape(MARK), re.escape(name)))
+
+
+def remove_section(ini, name, backups=None):
+    """Removes exactly our section (and the marker line above it) from the file as it is now, so anything HomeAI
+    changed since is kept. Line ends are kept, the file is backed up first and replaced atomically."""
     if not ini or not os.path.isfile(ini):
         return False
-    text = open(ini, encoding="utf-8").read()
-    pat = re.compile(r"\n?(?:%s\n)?\[%s\]\n(?:(?!\[).*\n?)*" % (re.escape(MARK), re.escape(name)))
-    new, n = pat.subn("\n", text)
-    if n:
-        with open(ini, "w", encoding="utf-8", newline="\n") as f:
-            f.write(new.rstrip("\n") + "\n")
-    return bool(n)
+    text, nl = _read_text(ini)
+    m = _section_re(name).search(text)
+    if not m:
+        return False
+    before, after = text[:m.start()], text[m.end():]
+    if not after.strip():
+        before = before.rstrip("\n") + "\n" if before.strip() else ""
+        after = ""
+    _backup(ini, backups if backups is not None else [])
+    _write_text(ini, before + after, nl)
+    return True
 
 
 def prompt_artist_preset(app_dir, model_id, safety_rule):
@@ -163,13 +220,14 @@ def add_preset(h, preset, backups):
     return True
 
 
-def remove_preset(data_dir):
-    pp = os.path.join(data_dir, "presets.json")
+def remove_preset(data_dir, backups=None):
+    pp = os.path.join(data_dir or "", "presets.json")
     presets = read_json(pp, None)
     if not isinstance(presets, list):
         return False
     keep = [x for x in presets if not (isinstance(x, dict) and x.get("id") == PRESET_ID)]
     if len(keep) != len(presets):
+        _backup(pp, backups if backups is not None else [])
         write_json(pp, keep)
         return True
     return False
@@ -177,14 +235,16 @@ def remove_preset(data_dir):
 
 def unlink(link, log=say):
     """Undo what link recorded in install.json: our models.ini section and our preset. Backups are kept."""
-    if not link:
+    if not isinstance(link, dict):
         return
-    if link.get("section") and link.get("section_added"):
-        log("   HomeAI models.ini: %s" % ("section removed" if remove_section(link.get("ini"), link["section"]) else "nothing to remove"))
+    made = []
+    if isinstance(link.get("section"), str) and link.get("section_added"):
+        log("   HomeAI models.ini: %s" % ("section removed" if remove_section(link.get("ini"), link["section"], made) else "nothing to remove"))
         if link.get("state_added"):
-            log("   HomeAI install.json: %s" % ("entry removed" if unregister_in_state(link.get("root"), link["section"]) else "nothing to remove"))
+            log("   HomeAI install.json: %s" % ("entry removed" if unregister_in_state(link.get("root"), link["section"], made) else "nothing to remove"))
     if link.get("preset"):
-        log("   HomeAI preset: %s" % ("removed" if remove_preset(link.get("data")) else "nothing to remove"))
-    for b in link.get("backups", []):
-        if os.path.exists(b):
+        log("   HomeAI preset: %s" % ("removed" if remove_preset(link.get("data"), made) else "nothing to remove"))
+    old = link.get("backups") if isinstance(link.get("backups"), list) else []
+    for b in old + made:
+        if isinstance(b, str) and os.path.exists(b):
             log("   backup kept: %s" % b)

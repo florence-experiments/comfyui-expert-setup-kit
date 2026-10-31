@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from pathlib import Path
@@ -172,15 +173,29 @@ NODE_MAP_URL = "https://raw.githubusercontent.com/ltdrdata/ComfyUI-Manager/main/
 def _node_map() -> dict:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     f = CACHE_DIR / "extension-node-map.json"
-    if not f.exists() or time.time() - f.stat().st_mtime > 3 * 86400:
+    cached = None
+    if f.exists():
+        try:
+            cached = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            cached = None
+        if not isinstance(cached, dict):       # damaged cache = a miss (it is fetched again below)
+            cached = None
+    if cached is None or time.time() - f.stat().st_mtime > 3 * 86400:
         try:
             r = session().get(NODE_MAP_URL, timeout=60)
-            if r.status_code == 200:
-                f.write_bytes(r.content)
+            fresh = r.json() if r.status_code == 200 else None
+            if isinstance(fresh, dict) and fresh:
+                tmp = f.with_name(f".{f.name}.{os.getpid()}.tmp")
+                tmp.write_text(json.dumps(fresh), encoding="utf-8")
+                os.replace(tmp, f)
+                return fresh
         except Exception:
-            if not f.exists():
-                raise
-    return json.loads(f.read_text(encoding="utf-8"))
+            if cached is None:
+                raise ToolError("Could not download ComfyUI-Manager's node map (no usable copy in the cache)")
+        if cached is None:
+            raise ToolError("ComfyUI-Manager's node map could not be read (no usable copy in the cache)")
+    return cached
 
 
 @tool("find_node_pack",

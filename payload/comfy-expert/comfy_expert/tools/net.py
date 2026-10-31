@@ -2,17 +2,35 @@
 from __future__ import annotations
 
 import requests
+from urllib.parse import urlsplit
 
 from ..config import load_config
 
 _SESSION: requests.Session | None = None
 
 
+_LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+class _Session(requests.Session):
+    """requests.Session that never sends this computer's own services (ComfyUI, llama-server) through a proxy,
+    neither the one set in config.yaml nor HTTP(S)_PROXY from the environment."""
+
+    def request(self, method, url, *args, **kwargs):
+        try:
+            host = (urlsplit(str(url)).hostname or "").lower()
+        except ValueError:
+            host = ""
+        if host in _LOCAL_HOSTS:
+            kwargs["proxies"] = {"http": None, "https": None}
+        return super().request(method, url, *args, **kwargs)
+
+
 def session() -> requests.Session:
     global _SESSION
     if _SESSION is None:
         cfg = load_config()
-        s = requests.Session()
+        s = _Session()
         s.headers["User-Agent"] = cfg["network"].get("user_agent") or "ComfyUI-Expert/1.0"
         proxy = (cfg["network"].get("proxy") or "").strip()
         if proxy:

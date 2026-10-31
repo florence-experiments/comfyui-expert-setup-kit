@@ -15,7 +15,8 @@ import requests
 
 from ..agent import Agent, Session, abort_response
 from ..tools import Turn
-from ..chats import ChatStore, make_title
+from ..chats import ChatStore, DamagedChat, make_title
+from ..tools.comfy import cancel_prompts
 from ..config import APP_DIR, load_config
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -61,7 +62,10 @@ def create_app(store: ChatStore | None = None, agent: Agent | None = None) -> Fa
         if sid and sid in sessions:
             return sessions[sid]
         if sid and store.exists(sid):
-            return _cache(store.load(sid))
+            try:
+                return _cache(store.load(sid))
+            except DamagedChat as e:
+                raise HTTPException(422, f"{e}. Start a new chat; the damaged file stays in data/chats for recovery.")
         if not create:
             raise HTTPException(404, "unknown chat")
         s = Session()
@@ -161,30 +165,24 @@ def create_app(store: ChatStore | None = None, agent: Agent | None = None) -> Fa
 
     def _cancel_comfy(turn: Turn) -> dict:
         """Remove the ComfyUI jobs this turn queued, and interrupt the one running (local ComfyUI only)."""
-        ids, url = list(turn.comfy_prompts), turn.comfy_url
-        if not ids or not url:
-            return {}
-        out: dict = {"prompts": ids}
+        return cancel_prompts(turn.comfy_url, list(turn.comfy_prompts))
+
+    async def _body(req: Request) -> dict:
         try:
-            q = requests.get(url + "/queue", timeout=5).json()
-            running = [x[1] for x in q.get("queue_running") or [] if len(x) > 1]
-            pending = [x[1] for x in q.get("queue_pending") or [] if len(x) > 1]
-            mine_pending = [i for i in ids if i in pending]
-            if mine_pending:
-                requests.post(url + "/queue", json={"delete": mine_pending}, timeout=5)
-                out["removed_from_queue"] = mine_pending
-            mine_running = [i for i in ids if i in running]
-            if mine_running:
-                requests.post(url + "/interrupt", json={"prompt_id": mine_running[0]}, timeout=5)
-                out["interrupted"] = mine_running
-        except (requests.RequestException, ValueError) as e:
-            out["error"] = str(e)
-        return out
+            body = await req.json()
+        except Exception:
+            raise HTTPException(400, "the request body is not JSON")
+        if not isinstance(body, dict):
+            raise HTTPException(400, "the request body must be a JSON object")
+        return body
+
+    def _sid(v) -> str | None:
+        return v if isinstance(v, str) and v else None
 
     @app.post("/api/stop")
     def api_stop(body: dict):
         """Stop button: cancel the running turn of this chat (model generation, tools, queued ComfyUI jobs)."""
-        sid = body.get("session_id")
+        sid = _sid(body.get("session_id"))
         s = sessions.get(sid) if sid else None
         turn = s.turn if s else None
         lock = locks.get(sid) if sid else None
@@ -202,11 +200,12 @@ def create_app(store: ChatStore | None = None, agent: Agent | None = None) -> Fa
 
     @app.post("/api/chat")
     async def chat(req: Request):
-        body = await req.json()
-        msg = (body.get("message") or "").strip()
+        body = await _body(req)
+        msg = body.get("message")
+        msg = msg.strip() if isinstance(msg, str) else ""
         if not msg:
             raise HTTPException(400, "empty message")
-        s = get_session(body.get("session_id"))
+        s = get_session(_sid(body.get("session_id")))
         prepared: dict = {}
 
         def events():
@@ -222,8 +221,8 @@ def create_app(store: ChatStore | None = None, agent: Agent | None = None) -> Fa
 
     @app.post("/api/confirm")
     async def confirm(req: Request):
-        body = await req.json()
-        s = get_session(body.get("session_id"), create=False)
+        body = await _body(req)
+        s = get_session(_sid(body.get("session_id")), create=False)
         ok = bool(body.get("approved"))
         entry = {"role": "decision", "ts": time.time(), "approved": ok} if s.pending else None
         return stream(s, lambda: agent.resume(s, ok), entry)
@@ -244,7 +243,8 @@ def create_app(store: ChatStore | None = None, agent: Agent | None = None) -> Fa
             body = await req.json()
         except Exception:
             body = {}
-        s = _cache(store.create((body or {}).get("title") or ""))
+        title = body.get("title") if isinstance(body, dict) else ""
+        s = _cache(store.create(title if isinstance(title, str) else ""))
         return summary(s)
 
     @app.get("/api/chats/{cid}")
@@ -256,8 +256,9 @@ def create_app(store: ChatStore | None = None, agent: Agent | None = None) -> Fa
 
     @app.patch("/api/chats/{cid}")
     async def rename_chat(cid: str, req: Request):
-        body = await req.json()
-        title = (body.get("title") or "").strip()
+        body = await _body(req)
+        title = body.get("title")
+        title = title.strip() if isinstance(title, str) else ""
         if not title:
             raise HTTPException(400, "empty title")
         if cid not in sessions and not store.exists(cid):

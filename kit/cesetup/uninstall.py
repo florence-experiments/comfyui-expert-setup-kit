@@ -32,12 +32,19 @@ def _rm(path):
         os.remove(path)
 
 
+def _too_broad(path):
+    """A drive root or the home folder is never offered for deletion, whatever install.json says."""
+    p = os.path.normcase(os.path.abspath(path)).rstrip("\\/")
+    return p in ("", os.path.normcase(os.path.abspath(os.path.expanduser("~"))).rstrip("\\/")) or \
+        os.path.dirname(os.path.abspath(path)) == os.path.abspath(path)
+
+
 def main(argv=None, ask=None, root=None):
     root = root or ROOT
     ask = ask or Asker()
     sp = os.path.join(root, "install.json")
     st = read_json(sp, None)
-    if not st:
+    if not isinstance(st, dict) or not st:
         say("No ComfyUI Expert installation found in %s" % root)
         return 2
     say("ComfyUI Expert uninstaller - each item is only removed if you type yes.\n")
@@ -52,16 +59,18 @@ def main(argv=None, ask=None, root=None):
         return False
 
     link = st.get("homeai_link")
-    if link:
+    if isinstance(link, dict) and link:
         if offer("unlink", "Undo the HomeAI link (remove the ComfyUI Expert model entry and the Prompt Artist button "
                  "from HomeAI at %s)?" % link.get("root"), lambda: homeai_link.unlink(link)):
             st.pop("homeai_link", None)
             write_json(sp, st)
-    sc = [p for p in st.get("shortcuts", []) if os.path.exists(p)]
+    sc = [p for p in (st.get("shortcuts") if isinstance(st.get("shortcuts"), list) else [])
+          if isinstance(p, str) and os.path.exists(p)]
     if sc:
         offer("shortcuts", "Remove %d ComfyUI Expert shortcut(s)?" % len(sc), lambda: [_rm(p) for p in sc])
-    comfy = st.get("comfyui") or {}
-    if comfy.get("installed_by_kit") and comfy.get("install_dir") and os.path.isdir(comfy["install_dir"]):
+    comfy = st.get("comfyui") if isinstance(st.get("comfyui"), dict) else {}
+    if comfy.get("installed_by_kit") and isinstance(comfy.get("install_dir"), str) and os.path.isdir(comfy["install_dir"]) \
+            and not _too_broad(comfy["install_dir"]):
         p = comfy["install_dir"]
         offer("comfyui", "Delete the ComfyUI that this kit installed, INCLUDING any models and pictures inside it (%s, %.1f GB)?"
               % (p, _size_gb(p)), lambda: _rm(p))

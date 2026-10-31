@@ -9,6 +9,8 @@ import time
 from pathlib import Path
 from urllib.parse import urlparse, unquote
 
+import requests
+
 from . import tool, ToolError
 from .net import session, human_size
 from ..config import load_config
@@ -71,8 +73,8 @@ def probe(url: str) -> dict:
             if cr and "/" in cr:
                 tail = cr.split("/")[-1]
                 total = int(tail) if tail.isdigit() else None
-            elif r.headers.get("content-length") and r.status_code == 200:
-                total = int(r.headers["content-length"])
+            elif r.status_code == 200:
+                total = _pos_int(r.headers.get("content-length"))
             info.update(ok=True, size_bytes=total, size=human_size(total), filename=_filename_from(r, url),
                         resumable=r.status_code == 206)
     else:
@@ -151,9 +153,17 @@ def download_file(url: str, folder: str, filename: str = "", subfolder: str = ""
     if not fn:
         raise ToolError("Could not work out a filename - pass filename")
     target = _target(folder, fn, subfolder)
-    size = p.get("size_bytes") or expected_size_bytes
-    if target.exists() and (not size or target.stat().st_size == size):
-        return {"skipped": True, "reason": "already downloaded", "path": str(target)}
+    size = _pos_int(p.get("size_bytes")) or _pos_int(expected_size_bytes)
+    sha = sha256.strip().lower() if isinstance(sha256, str) else ""
+    if sha.startswith("sha256:"):
+        sha = sha[7:]
+    if sha and not re.fullmatch(r"[0-9a-f]{64}", sha):
+        raise ToolError("sha256 must be the 64-character hex SHA-256 of the file")
+    if target.exists():
+        same = (not size or target.stat().st_size == size) and (not sha or _sha_file(target) == sha)
+        if same:
+            return {"skipped": True, "reason": "already downloaded", "path": str(target),
+                    "verified": "sha256" if sha else ("size" if size else "not checked (no size or sha256 known)")}
     if not confirm:
         return {"dry_run": True, "would_download": url, "to": str(target), "size": human_size(size),
                 "message": "Ask the user to approve, then call again with confirm=true."}
@@ -161,41 +171,117 @@ def download_file(url: str, folder: str, filename: str = "", subfolder: str = ""
         raise ToolError(f"A different file with the same name already exists: {target}. Choose another filename.")
     target.parent.mkdir(parents=True, exist_ok=True)
     part = target.with_name(target.name + ".part")
+    t0 = time.time()
+    for round_ in (1, 2):
+        got, total, err = _fetch(url, part, size, fn)
+        if err == _RESTART and round_ == 1:
+            continue
+        if err == _RESTART:
+            raise ToolError(f"{fn}: the server could not resume the download correctly twice - nothing installed")
+        if err:
+            return {"ok": False, "error": f"{err}. Run download_file again to resume.", "partial_file": str(part)}
+        want = size or total
+        if want and got < want:
+            return {"ok": False, "error": f"Incomplete: {human_size(got)} of {human_size(want)}. Run download_file again to resume.",
+                    "partial_file": str(part)}
+        if (not want or got == want) and (not sha or _sha_file(part) == sha):
+            break
+        _remove(part)                              # too big / wrong size / wrong sha256: never installed
+        if round_ == 2:
+            raise ToolError(f"{fn} did not match its size / SHA-256 twice - deleted and NOT installed")
+    os.replace(part, target)
+    secs = max(time.time() - t0, 0.001)
+    out = {"downloaded": str(target), "size": human_size(got), "speed": human_size(got / secs) + "/s",
+           "sha256_checked": bool(sha), "size_checked": bool(want),
+           "note": "Press 'r' in ComfyUI (or refresh the browser) so the new file shows up in the loader list."}
+    if not want and not sha:
+        out["warning"] = "Neither the size nor a SHA-256 was known, so the file could not be checked."
+    return out
+
+
+_RESTART = "restart"       # _fetch deleted a partial that could not be resumed: fetch again from the start
+FAIL_FAST = {401: "login / API key required", 403: "forbidden (gated or early-access?)", 404: "not found", 410: "gone"}
+
+
+def _pos_int(v) -> int | None:
+    try:
+        v = int(v)
+    except (TypeError, ValueError):
+        return None
+    return v if v > 0 else None
+
+
+def _remove(p: Path) -> None:
+    try:
+        p.unlink()
+    except OSError:
+        pass
+
+
+def _sha_file(p: Path) -> str:
+    h = hashlib.sha256()
+    with open(p, "rb") as fh:
+        for b in iter(lambda: fh.read(4 * 1024 * 1024), b""):
+            h.update(b)
+    return h.hexdigest()
+
+
+def _content_range(r) -> tuple[int | None, int | None]:
+    m = re.match(r"\s*bytes\s+(\d+)-\d+/(\d+|\*)", r.headers.get("content-range") or "")
+    if not m:
+        return None, None
+    return int(m.group(1)), (int(m.group(2)) if m.group(2).isdigit() else None)
+
+
+def _fetch(url: str, part: Path, size: int | None, fn: str) -> tuple[int, int | None, str | None]:
+    """One pass: resume `part` if possible. -> (bytes in part, size the server reported, error or None).
+    A partial that is already too big, or that the server cannot resume correctly, is started again."""
     have = part.stat().st_size if part.exists() else 0
+    if size and have > size:
+        _remove(part)
+        have = 0
+    if size and have == size:
+        return have, size, None                    # complete already: only needs checking
     headers = dict(_auth_headers(url))
     if have:
         headers["Range"] = f"bytes={have}-"
-    r = session().get(url, headers=headers, stream=True, allow_redirects=True, timeout=60)
-    if have and r.status_code == 200:
-        have = 0  # server ignored range: restart
-    elif r.status_code not in (200, 206):
-        raise ToolError(f"HTTP {r.status_code} while downloading")
-    mode = "ab" if have else "wb"
-    done, t0, last = have, time.time(), 0.0
-    with open(part, mode) as fh:
-        for chunk in r.iter_content(1024 * 1024):
-            if not chunk:
-                continue
-            fh.write(chunk)
-            done += len(chunk)
-            if PROGRESS_CB and time.time() - last > 1:
-                last = time.time()
-                PROGRESS_CB(fn, done, size)
-    got = part.stat().st_size
-    if size and got != size:
-        return {"ok": False, "error": f"Incomplete: {human_size(got)} of {human_size(size)}. Run download_file again to resume.",
-                "partial_file": str(part)}
-    if sha256:
-        h = hashlib.sha256()
-        with open(part, "rb") as fh:
-            for b in iter(lambda: fh.read(4 * 1024 * 1024), b""):
-                h.update(b)
-        if h.hexdigest().lower() != sha256.lower():
-            bad = part.with_name(part.name + ".badhash")
-            os.replace(part, bad)
-            raise ToolError(f"SHA256 mismatch - file kept as {bad} and NOT installed")
-    os.replace(part, target)
-    secs = max(time.time() - t0, 0.001)
-    return {"downloaded": str(target), "size": human_size(got), "speed": human_size((got - have) / secs) + "/s",
-            "sha256_checked": bool(sha256),
-            "note": "Press 'r' in ComfyUI (or refresh the browser) so the new file shows up in the loader list."}
+    try:
+        r = session().get(url, headers=headers, stream=True, allow_redirects=True, timeout=60)
+    except requests.RequestException as e:
+        return have, None, f"download failed ({type(e).__name__})"
+    with r:
+        if r.status_code in FAIL_FAST:
+            raise ToolError(f"HTTP {r.status_code} while downloading: {FAIL_FAST[r.status_code]}")
+        if r.status_code == 416 and have:          # nothing left to send: the partial is complete or wrong
+            _, total = _content_range(r)
+            if total and have == total:
+                return have, total, None
+            _remove(part)
+            return 0, total, _RESTART
+        if r.status_code not in (200, 206):
+            raise ToolError(f"HTTP {r.status_code} while downloading")
+        total = None
+        if r.status_code == 206:
+            start, total = _content_range(r)
+            if start != have:                      # wrong piece: start over rather than glue bad bytes on
+                _remove(part)
+                return 0, total, _RESTART
+        else:
+            have = 0                               # server ignored the range: start from the beginning
+            total = _pos_int(r.headers.get("content-length"))
+        done, last = have, 0.0
+        try:
+            with open(part, "ab" if have else "wb") as fh:
+                for chunk in r.iter_content(1024 * 1024):
+                    if not chunk:
+                        continue
+                    fh.write(chunk)
+                    done += len(chunk)
+                    if size and done > size:       # more than the file should hold: stop, it will be deleted
+                        break
+                    if PROGRESS_CB and time.time() - last > 1:
+                        last = time.time()
+                        PROGRESS_CB(fn, done, size or total)
+        except requests.RequestException as e:
+            return part.stat().st_size if part.exists() else 0, total, f"connection lost ({type(e).__name__})"
+    return part.stat().st_size, total, None
